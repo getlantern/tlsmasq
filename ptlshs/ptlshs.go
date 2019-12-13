@@ -14,6 +14,9 @@ import (
 const (
 	// DefaultNonceTTL is used when DialerOpts.NonceTTL is not specified.
 	DefaultNonceTTL = 10 * time.Second
+
+	// DefaultNonceSweepInterval is used when ListenerOpts.NonceSweepInterval is not specified.
+	DefaultNonceSweepInterval = time.Minute
 )
 
 // TODO: import implementation from the fakshake/shakes package
@@ -30,11 +33,11 @@ type DialerOpts struct {
 	// PostHandshake allows for communication after the initial proxied TLS handshake. The dialed
 	// listener should use a corresponding PostHandshake function. All writes and reads will be
 	// wrapped in TLS records using the negotiated cipher suite and version, but secured using the
-	// the pre-shared secret and the server random sent in the server hello. Dial functions return
-	// only after PostHandshake is complete.
-	//
-	// If unspecified, this will simply be a signal from the client indicating that the proxied
+	// the pre-shared secret and the server random sent in the server hello. When PostHandshake is
+	// complete, a replay-resistant completion signal will be sent indicating that the proxied
 	// handshake is complete.
+	//
+	// If unspecified, this will simply be a completion signal from the client.
 	PostHandshake func(net.Conn) error
 
 	// A Secret pre-shared between listeners and dialers. This value must be set.
@@ -45,30 +48,29 @@ type DialerOpts struct {
 	NonceTTL time.Duration
 }
 
+func (opts DialerOpts) withDefaults() DialerOpts {
+	newOpts := opts
+	if opts.TLSConfig == nil {
+		newOpts.TLSConfig = &tls.Config{}
+	}
+	if opts.PostHandshake == nil {
+		newOpts.PostHandshake = func(_ net.Conn) error { return nil }
+	}
+	if opts.NonceTTL == 0 {
+		newOpts.NonceTTL = DefaultNonceTTL
+	}
+	return newOpts
+}
+
 // Dialer is the interface implemented by network dialers.
 type Dialer interface {
 	Dial(network, address string) (net.Conn, error)
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-type dialer struct {
-	Dialer
-	DialerOpts
-}
-
-func (d dialer) Dial(network, address string) (net.Conn, error) {
-	return d.DialContext(context.Background(), network, address)
-}
-
-func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	// TODO: respect timeout and deadline on d.Dialer
-	// TODO: implement me!
-	return nil, nil
-}
-
 // WrapDialer wraps the input dialer with a network dialer which will perform the ptlshs protocol.
 func WrapDialer(d Dialer, opts DialerOpts) Dialer {
-	return dialer{d, opts}
+	return dialer{d, opts.withDefaults()}
 }
 
 // Dial a ptlshs listener.
@@ -89,36 +91,42 @@ type ListenerOpts struct {
 	// PostHandshake allows for communication after the initial proxied TLS handshake. Dialing peers
 	// should use a corresponding PostHandshake function. All writes and reads will be wrapped in
 	// TLS records using the negotiated cipher suite and version, but secured using the the
-	// pre-shared secret and the server random sent in the server hello. Accept functions return
-	// only only after PostHandshake is complete.
+	// pre-shared secret and the server random sent in the server hello. When PostHandshake is
+	// complete, the listener will wait for a completion signal from the peer.
 	//
-	// If unspecified, this will simply wait for a signal from the peer indicating that the proxied
-	// handshake is complete.
+	// If unspecified, this will simply wait for a completion signal from the peer.
 	PostHandshake func(net.Conn) error
 
 	// A Secret pre-shared between listeners and dialers.
 	Secret Secret
 
-	// NonceSweepInterval determines how often the nonce cache is swept for expired entries.
+	// NonceSweepInterval determines how often the nonce cache is swept for expired entries. If not
+	// specified, DefaultNonceSweepInterval will be used.
 	NonceSweepInterval time.Duration
 
 	// NonFatalErrors will be used to log non-fatal errors. These will likely be due to probes.
 	NonFatalErrors chan<- error
 }
 
-type listener struct {
-	net.Listener
-	ListenerOpts
-}
-
-func (l listener) Accept() (net.Conn, error) {
-	// TODO: implement me!
-	return nil, nil
+func (opts ListenerOpts) withDefaults() ListenerOpts {
+	newOpts := opts
+	if opts.PostHandshake == nil {
+		newOpts.PostHandshake = func(_ net.Conn) error { return nil }
+	}
+	if opts.NonceSweepInterval == 0 {
+		newOpts.NonceSweepInterval = DefaultNonceSweepInterval
+	}
+	if opts.NonFatalErrors == nil {
+		// Errors are dropped if the channel is full, so this should be fine.
+		newOpts.NonFatalErrors = make(chan error)
+	}
+	return newOpts
 }
 
 // WrapListener wraps the input listener with one which speaks the ptlshs protocol.
 func WrapListener(l net.Listener, opts ListenerOpts) net.Listener {
-	return listener{l, opts}
+	opts = opts.withDefaults()
+	return listener{l, opts, newNonceCache(opts.NonceSweepInterval)}
 }
 
 // Listen for ptlshs dialers.
@@ -127,5 +135,5 @@ func Listen(network, address string, opts ListenerOpts) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return listener{l, opts}, nil
+	return WrapListener(l, opts), nil
 }

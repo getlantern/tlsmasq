@@ -1,7 +1,6 @@
 package ptlshs
 
 import (
-	"crypto/tls"
 	"net"
 	"sync"
 )
@@ -12,14 +11,22 @@ type Conn struct {
 	// The underlying connection to the server. This is likely just a TCP connection.
 	net.Conn
 
-	// The state of the TLS connection with the proxied server. Useful for determining things like
-	// the negotiated version and cipher suite.
-	proxiedConnectionState tls.ConnectionState
+	version, suite uint16
 
 	seq [8]byte
 	iv  [16]byte
 
 	seqLock sync.Mutex
+}
+
+// Version is the TLS version negotiated during the proxied handshake.
+func (c *Conn) Version() uint16 {
+	return c.version
+}
+
+// CipherSuite is the cipher suite negotiated during the proxied handshake.
+func (c *Conn) CipherSuite() uint16 {
+	return c.suite
 }
 
 // NextSeq increments and returns the connection's sequence number. The starting sequence number is
@@ -48,10 +55,4 @@ func (c *Conn) NextSeq() [8]byte {
 // Dialers and listeners will have the same IV, so this can be used when needed in ciphers.
 func (c *Conn) IV() [16]byte {
 	return c.iv
-}
-
-// ProxiedConnectionState returns the state of the TLS connection with the proxied server. This is
-// useful for determining things like the negotiated version and cipher suite.
-func (c *Conn) ProxiedConnectionState() tls.ConnectionState {
-	return c.proxiedConnectionState
 }
