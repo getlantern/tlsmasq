@@ -24,13 +24,24 @@ type Secret [52]byte
 
 // DialerOpts specifies options for dialing.
 type DialerOpts struct {
-	// TLSConfig is used for the proxied handshake.
+	// TLSConfig is used for the proxied handshake. If nil, the zero value is used.
 	TLSConfig *tls.Config
 
-	// A Secret pre-shared between listeners and dialers.
+	// PostHandshake allows for communication after the initial proxied TLS handshake. The dialed
+	// listener should use a corresponding PostHandshake function. All writes and reads will be
+	// wrapped in TLS records using the negotiated cipher suite and version, but secured using the
+	// the pre-shared secret and the server random sent in the server hello. Dial functions return
+	// only after PostHandshake is complete.
+	//
+	// If unspecified, this will simply be a signal from the client indicating that the proxied
+	// handshake is complete.
+	PostHandshake func(net.Conn) error
+
+	// A Secret pre-shared between listeners and dialers. This value must be set.
 	Secret Secret
 
-	// NonceTTL specifies the time-to-live for nonces used in completion signals.
+	// NonceTTL specifies the time-to-live for nonces used in completion signals. DefaultNonceTTL is
+	// used if NonceTTL is unspecified.
 	NonceTTL time.Duration
 }
 
@@ -74,6 +85,16 @@ func DialTimeout(network, address string, opts DialerOpts, timeout time.Duration
 type ListenerOpts struct {
 	// DialProxied is used to create TCP connections to the proxied server. Must not be nil.
 	DialProxied func() (net.Conn, error)
+
+	// PostHandshake allows for communication after the initial proxied TLS handshake. Dialing peers
+	// should use a corresponding PostHandshake function. All writes and reads will be wrapped in
+	// TLS records using the negotiated cipher suite and version, but secured using the the
+	// pre-shared secret and the server random sent in the server hello. Accept functions return
+	// only only after PostHandshake is complete.
+	//
+	// If unspecified, this will simply wait for a signal from the peer indicating that the proxied
+	// handshake is complete.
+	PostHandshake func(net.Conn) error
 
 	// A Secret pre-shared between listeners and dialers.
 	Secret Secret
