@@ -34,6 +34,9 @@ func (c *Conn) CipherSuite() uint16 {
 // derived sequence numbers, so this can be used in cipher suites which use the sequence number as a
 // nonce.
 func (c *Conn) NextSeq() [8]byte {
+	// TODO: Take a look at how this is actually used. We probably shouldn't be incrementing this
+	// ourselves since reptls.Read/WriteRecord already does it.
+
 	c.seqLock.Lock()
 	defer c.seqLock.Unlock()
 

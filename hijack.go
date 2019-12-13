@@ -1,10 +1,13 @@
 package tlsmasq
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 
+	"github.com/getlantern/tlsmasq/internal/reptls"
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
@@ -24,9 +27,11 @@ func hijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Co
 	if err != nil {
 		return nil, err
 	}
-
-	disguisedConn := disguisedConn{conn.Conn, conn, preshared, true}
-	hijackedConn := tls.Client(&disguisedConn, cfg)
+	disguisedConn, err := disguise(conn.Conn, conn, preshared)
+	if err != nil {
+		return nil, err
+	}
+	hijackedConn := tls.Client(disguisedConn, cfg)
 	if err := hijackedConn.Handshake(); err != nil {
 		return nil, fmt.Errorf("hijack handshake failed: %w", err)
 	}
@@ -46,9 +51,11 @@ func allowHijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (n
 	if err != nil {
 		return nil, err
 	}
-
-	disguisedConn := disguisedConn{conn.Conn, conn, preshared, true}
-	hijackedConn := tls.Server(&disguisedConn, cfg)
+	disguisedConn, err := disguise(conn.Conn, conn, preshared)
+	if err != nil {
+		return nil, err
+	}
+	hijackedConn := tls.Server(disguisedConn, cfg)
 	if err := hijackedConn.Handshake(); err != nil {
 		return nil, fmt.Errorf("hijack handshake failed: %w", err)
 	}
@@ -90,8 +97,11 @@ func suiteSupported(cfg *tls.Config, suite uint16) bool {
 type disguisedConn struct {
 	net.Conn
 
-	ptlshsConn *ptlshs.Conn
-	preshared  ptlshs.Secret
+	state     *reptls.ConnState
+	preshared ptlshs.Secret
+	iv        [16]byte
+
+	readBuf *bytes.Buffer
 
 	// When set, this connection will disguise writes as TLS records using the parameters of
 	// ptlshsConn and the pre-shared secret. Reads will be assumed to be disguised as well.
@@ -99,20 +109,47 @@ type disguisedConn struct {
 	inDisguise bool
 }
 
+func disguise(conn net.Conn, parameters *ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
+	state, err := reptls.NewConnState(parameters.TLSVersion(), parameters.CipherSuite(), parameters.NextSeq())
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive connection state: %w", err)
+	}
+	return &disguisedConn{conn, state, preshared, parameters.IV(), new(bytes.Buffer), true}, nil
+}
+
 func (dc *disguisedConn) Read(b []byte) (n int, err error) {
-	if !dc.inDisguise {
-		return dc.Conn.Read(b)
+	n, err = dc.readBuf.Read(b)
+	if err != nil && err != io.EOF {
+		return
+	}
+	if n == len(b) {
+		return
 	}
 
-	// TODO: implement me!
-	return 0, nil
+	if !dc.inDisguise {
+		return dc.Conn.Read(b[n:])
+	}
+
+	for _, result := range reptls.ReadRecords(dc.Conn, dc.state, dc.preshared, dc.iv) {
+		if result.Err != nil {
+			return 0, fmt.Errorf("failed to read TLS record: %w", err)
+		}
+		// Note: bytes.Buffer.Write always returns a nil error.
+		dc.readBuf.Write(result.Read)
+	}
+
+	currentN, err := dc.readBuf.Read(b[n:])
+	n += currentN
+	return
 }
 
 func (dc *disguisedConn) Write(b []byte) (n int, err error) {
 	if !dc.inDisguise {
 		return dc.Conn.Write(b)
 	}
-
-	// TODO: implement me!
-	return 0, nil
+	n, err = reptls.WriteRecord(dc.Conn, b, dc.state, dc.preshared, dc.iv)
+	if err != nil {
+		err = fmt.Errorf("failed to wrap data in TLS record: %w", err)
+	}
+	return
 }
