@@ -69,10 +69,6 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive sequence and IV: %w", err)
 	}
-	// TODO: conn needs to wrapped in disguiseConn
-	if err := d.PostHandshake(conn); err != nil {
-		return nil, fmt.Errorf("post-handshake failed: %w", err)
-	}
 	if err := d.signalComplete(tlsConn, conn, seq, iv); err != nil {
 		return nil, fmt.Errorf("failed to signal completion of fake handshake: %w", err)
 	}

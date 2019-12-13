@@ -23,22 +23,12 @@ const (
 // sent by the dialer.
 type Secret [52]byte
 
-// TODO: document need to set DialerOpts.TLSConfig.ServerName.
-
 // DialerOpts specifies options for dialing.
 type DialerOpts struct {
-	// TLSConfig is used for the proxied handshake. If nil, the zero value is used.
+	// TLSConfig is used for the proxied handshake. If nil, the zero value is used. However, it is
+	// ideal that configuration be provided with the ServerName field set to the name of the
+	// proxied server. This will aid in making the handshake look legitimate.
 	TLSConfig *tls.Config
-
-	// PostHandshake allows for communication after the initial proxied TLS handshake. The dialed
-	// listener should use a corresponding PostHandshake function. All writes and reads will be
-	// wrapped in TLS records using the negotiated cipher suite and version, but secured using the
-	// the pre-shared secret and the server random sent in the server hello. When PostHandshake is
-	// complete, a replay-resistant completion signal will be sent indicating that the proxied
-	// handshake is complete.
-	//
-	// If unspecified, this will simply be a completion signal from the client.
-	PostHandshake func(net.Conn) error
 
 	// A Secret pre-shared between listeners and dialers. This value must be set.
 	Secret Secret
@@ -52,9 +42,6 @@ func (opts DialerOpts) withDefaults() DialerOpts {
 	newOpts := opts
 	if opts.TLSConfig == nil {
 		newOpts.TLSConfig = &tls.Config{}
-	}
-	if opts.PostHandshake == nil {
-		newOpts.PostHandshake = func(_ net.Conn) error { return nil }
 	}
 	if opts.NonceTTL == 0 {
 		newOpts.NonceTTL = DefaultNonceTTL
@@ -91,15 +78,6 @@ type ListenerOpts struct {
 	// DialProxied is used to create TCP connections to the proxied server. Must not be nil.
 	DialProxied func() (net.Conn, error)
 
-	// PostHandshake allows for communication after the initial proxied TLS handshake. Dialing peers
-	// should use a corresponding PostHandshake function. All writes and reads will be wrapped in
-	// TLS records using the negotiated cipher suite and version, but secured using the the
-	// pre-shared secret and the server random sent in the server hello. When PostHandshake is
-	// complete, the listener will wait for a completion signal from the peer.
-	//
-	// If unspecified, this will simply wait for a completion signal from the peer.
-	PostHandshake func(net.Conn) error
-
 	// A Secret pre-shared between listeners and dialers.
 	Secret Secret
 
@@ -113,9 +91,6 @@ type ListenerOpts struct {
 
 func (opts ListenerOpts) withDefaults() ListenerOpts {
 	newOpts := opts
-	if opts.PostHandshake == nil {
-		newOpts.PostHandshake = func(_ net.Conn) error { return nil }
-	}
 	if opts.NonceSweepInterval == 0 {
 		newOpts.NonceSweepInterval = DefaultNonceSweepInterval
 	}
