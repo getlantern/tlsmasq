@@ -19,11 +19,11 @@ const (
 	DefaultNonceSweepInterval = time.Minute
 )
 
-// TODO: import implementation from the fakshake/shakes package
-
 // A Secret pre-shared between listeners and dialers. This is used to secure the completion signal
 // sent by the dialer.
 type Secret [52]byte
+
+// TODO: document need to set DialerOpts.TLSConfig.ServerName.
 
 // DialerOpts specifies options for dialing.
 type DialerOpts struct {
@@ -82,6 +82,9 @@ func Dial(network, address string, opts DialerOpts) (net.Conn, error) {
 func DialTimeout(network, address string, opts DialerOpts, timeout time.Duration) (net.Conn, error) {
 	return WrapDialer(&net.Dialer{Timeout: timeout}, opts).Dial(network, address)
 }
+
+// TODO: ListenerOpts.DialProxied should perhaps just be AddrToProxied since we'll always need to
+// dial TCP to proxied servers
 
 // ListenerOpts specifies options for listening.
 type ListenerOpts struct {

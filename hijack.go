@@ -61,8 +61,7 @@ func allowHijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (n
 }
 
 func ensureParameters(cfg *tls.Config, conn *ptlshs.Conn) (*tls.Config, error) {
-	connState := conn.ProxiedConnectionState()
-	version, suite := connState.Version, connState.CipherSuite
+	version, suite := conn.TLSVersion(), conn.CipherSuite()
 	if !suiteSupported(cfg, suite) {
 		return nil, fmt.Errorf("negotiated suite %d is not supported", suite)
 	}

@@ -19,8 +19,8 @@ type Conn struct {
 	seqLock sync.Mutex
 }
 
-// Version is the TLS version negotiated during the proxied handshake.
-func (c *Conn) Version() uint16 {
+// TLSVersion is the TLS version negotiated during the proxied handshake.
+func (c *Conn) TLSVersion() uint16 {
 	return c.version
 }
 
