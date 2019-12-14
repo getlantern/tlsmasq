@@ -31,9 +31,9 @@ type nonceCache struct {
 	// earlier than bucketDiff before the timestamp. Thus, every nonce can logically only belong to
 	// one bucket. startTime determines the start of the first bucket's span.
 	//
-	// When the nonce cache is created (in the NonceCache function), we start an eviction routine
-	// which will periodically wake up and delete a bucket. When we create a new bucket, we register
-	// it with the evictor using the evictions channel.
+	// When the nonce cache is created (in newNonceCache), we start an eviction routine which will
+	// periodically wake up and delete a bucket. When we create a new bucket, we register it with
+	// the evictor using the evictions channel.
 
 	startTime  time.Time
 	bucketDiff time.Duration
@@ -56,11 +56,11 @@ func newNonceCache(sweepEvery time.Duration) *nonceCache {
 }
 
 func (nc *nonceCache) isValid(n nonce) bool {
-	expTime := n.expiration()
-	if time.Now().After(expTime) {
+	expiration := n.expiration()
+	if time.Now().After(expiration) {
 		return false
 	}
-	bucket := nc.getBucket(expTime)
+	bucket := nc.getBucket(expiration)
 
 	nc.bucketsLock.Lock()
 	defer nc.bucketsLock.Unlock()
@@ -133,7 +133,7 @@ func (st *sortedTimes) insert(t time.Time) {
 		return
 	}
 	current := st.first
-	for current.next != nil && current.t.Before(t) {
+	for current.next != nil && current.next.t.Before(t) {
 		current = current.next
 	}
 	newNode.next = current.next
