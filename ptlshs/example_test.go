@@ -81,8 +81,8 @@ func Example() {
 	}
 	fmt.Println("received message from the server:", string(b))
 
-	// Try connecting to the fakeshake server with an unsuspecting HTTPS client. The connection will
-	// simply be proxied to the TLS server.
+	// Try connecting to the server with an unsuspecting HTTPS client. The connection will simply be
+	// proxied to the TLS server.
 	httpClient := http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 	resp, err := httpClient.Get("https://" + l.Addr().String())
 	if err != nil {

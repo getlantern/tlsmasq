@@ -18,8 +18,7 @@ import (
 
 // DialerOpts specifies options for dialing.
 type DialerOpts struct {
-	// ProxiedHandshakeOpts specifies options for the proxied handshake. If a PostHandshake function
-	// is specified, this will be executed prior to the hijack handshake.
+	// ProxiedHandshakeOpts specifies options for the proxied handshake.
 	ProxiedHandshakeOpts ptlshs.DialerOpts
 
 	// TLSConfig specifies configuration for the hijacked, true TLS connection with the server. This
@@ -86,10 +85,10 @@ type ListenerOpts struct {
 	// ProxiedHandshakeOpts specifies options for the proxied handshake.
 	ProxiedHandshakeOpts ptlshs.ListenerOpts
 
-	// TLSConfig specifies configuration for the hijacked, true TLS connection with the server. This
-	// hijacked connection will use whatever combination of cipher suite and version was negotiated
+	// TLSConfig specifies configuration for hijacked, true TLS connections with the clients. These
+	// hijacked connections will use whatever combination of cipher suite and version was negotiated
 	// during the proxied handshake. Thus it is important to set fields like CipherSuites and
-	// MinVersion to ensure that the security parameters of the hijacked connection are acceptable.
+	// MinVersion to ensure that the security parameters of the hijacked connections are acceptable.
 	TLSConfig *tls.Config
 }
 
