@@ -19,6 +19,11 @@ type Conn struct {
 	seqLock sync.Mutex
 }
 
+// NewConn initializes and returns a Conn. This is mostly intended for use in tests.
+func NewConn(transport net.Conn, version, suite uint16, seq [8]byte, iv [16]byte) *Conn {
+	return &Conn{transport, version, suite, seq, iv, sync.Mutex{}}
+}
+
 // TLSVersion is the TLS version negotiated during the proxied handshake.
 func (c *Conn) TLSVersion() uint16 {
 	return c.version

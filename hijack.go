@@ -70,10 +70,10 @@ func allowHijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (n
 func ensureParameters(cfg *tls.Config, conn *ptlshs.Conn) (*tls.Config, error) {
 	version, suite := conn.TLSVersion(), conn.CipherSuite()
 	if !suiteSupported(cfg, suite) {
-		return nil, fmt.Errorf("negotiated suite %d is not supported", suite)
+		return nil, fmt.Errorf("negotiated suite %#x is not supported", suite)
 	}
-	if version < cfg.MinVersion || version > cfg.MaxVersion {
-		return nil, fmt.Errorf("negotiated version %d is not supported", version)
+	if !versionSupported(cfg, version) {
+		return nil, fmt.Errorf("negotiated version %#x is not supported", version)
 	}
 
 	cfg = cfg.Clone()
@@ -92,6 +92,16 @@ func suiteSupported(cfg *tls.Config, suite uint16) bool {
 		}
 	}
 	return false
+}
+
+func versionSupported(cfg *tls.Config, version uint16) bool {
+	if version < cfg.MinVersion {
+		return false
+	}
+	if cfg.MaxVersion != 0 && version > cfg.MaxVersion {
+		return false
+	}
+	return true
 }
 
 type disguisedConn struct {
@@ -122,7 +132,7 @@ func (dc *disguisedConn) Read(b []byte) (n int, err error) {
 	if err != nil && err != io.EOF {
 		return
 	}
-	if n == len(b) {
+	if n > 0 {
 		return
 	}
 
