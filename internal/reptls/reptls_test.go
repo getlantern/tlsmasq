@@ -4,9 +4,8 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/tls"
-	"net"
+	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -41,42 +40,16 @@ func init() {
 }
 
 func TestReadAndWrite(t *testing.T) {
-	const (
-		msg     = "some great secret"
-		timeout = time.Second
-	)
-
-	l, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
-	require.NoError(t, err)
-
-	serverConnChan := make(chan *tls.Conn)
-	go func() {
-		conn, err := l.Accept()
-		require.NoError(t, err)
-		require.NoError(t, conn.(*tls.Conn).Handshake())
-		serverConnChan <- conn.(*tls.Conn)
-	}()
-
-	clientConn, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: timeout},
-		"tcp", l.Addr().String(), &tls.Config{InsecureSkipVerify: true})
-	require.NoError(t, err)
-
-	clientConn.SetDeadline(time.Now().Add(timeout))
-	require.NoError(t, clientConn.Handshake())
-
-	var serverConn *tls.Conn
-	select {
-	case serverConn = <-serverConnChan:
-	case <-time.After(timeout):
-		t.Fatal("timed out waiting for server connection")
-	}
+	t.Parallel()
 
 	var (
 		secret [52]byte
 		iv     [16]byte
 		seq    [8]byte
-		buf    = new(bytes.Buffer)
+		err    error
+
+		msg = "some great secret"
+		buf = new(bytes.Buffer)
 	)
 
 	_, err = rand.Read(secret[:])
@@ -86,60 +59,59 @@ func TestReadAndWrite(t *testing.T) {
 	_, err = rand.Read(seq[:])
 	require.NoError(t, err)
 
-	clientState, err := GetState(clientConn, seq)
-	require.NoError(t, err)
-	serverState, err := GetState(serverConn, seq)
-	require.NoError(t, err)
+	pre13Suites, tls13Suites := []uint16{}, []uint16{}
+	for suiteValue, suite := range cipherSuites {
+		if _, is13 := suite.(cipherSuiteTLS13); is13 {
+			tls13Suites = append(tls13Suites, suiteValue)
+		} else {
+			pre13Suites = append(pre13Suites, suiteValue)
+		}
+	}
 
-	_, err = WriteRecord(buf, []byte(msg), clientState, secret, iv)
-	require.NoError(t, err)
+	testFunc := func(version, suite uint16) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
 
-	roundTripped, err := ReadRecord(buf, serverState, secret, iv)
-	require.NoError(t, err)
+			writerState, err := NewConnState(version, suite, seq)
+			require.NoError(t, err)
+			readerState, err := NewConnState(version, suite, seq)
+			require.NoError(t, err)
 
-	require.Equal(t, msg, string(roundTripped))
+			_, err = WriteRecord(buf, []byte(msg), writerState, secret, iv)
+			require.NoError(t, err)
+
+			roundTripped, err := ReadRecord(buf, readerState, secret, iv)
+			require.NoError(t, err)
+
+			require.Equal(t, msg, string(roundTripped))
+		}
+	}
+
+	for _, version := range []uint16{tls.VersionTLS10, tls.VersionTLS11, tls.VersionTLS12} {
+		for _, suite := range pre13Suites {
+			t.Run(fmt.Sprintf("version_%#x_suite%#x", version, suite), testFunc(version, suite))
+		}
+	}
+	for _, suite := range tls13Suites {
+		t.Run(fmt.Sprintf("version_%#x_suite%#x", tls.VersionTLS13, suite), testFunc(tls.VersionTLS13, suite))
+	}
 }
 
 func TestReadRecords(t *testing.T) {
-	const timeout = time.Second
-	var msgs = []string{"fee", "fi", "fo", "fum"}
-
-	l, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
-	require.NoError(t, err)
-
-	serverConnChan := make(chan *tls.Conn)
-	go func() {
-		conn, err := l.Accept()
-		require.NoError(t, err)
-		require.NoError(t, conn.(*tls.Conn).Handshake())
-		serverConnChan <- conn.(*tls.Conn)
-	}()
-
-	clientConn, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: timeout},
-		"tcp", l.Addr().String(), &tls.Config{InsecureSkipVerify: true})
-	require.NoError(t, err)
-
-	clientConn.SetDeadline(time.Now().Add(timeout))
-	require.NoError(t, clientConn.Handshake())
-
-	var serverConn *tls.Conn
-	select {
-	case serverConn = <-serverConnChan:
-	case <-time.After(timeout):
-		t.Fatal("timed out waiting for server connection")
-	}
-
 	var (
 		secret [52]byte
 		iv     [16]byte
 		seq    [8]byte
-		buf    = new(bytes.Buffer)
+
+		msgs           = []string{"fee", "fi", "fo", "fum"}
+		version uint16 = tls.VersionTLS13
+		suite          = tls.TLS_AES_128_GCM_SHA256
+		buf            = new(bytes.Buffer)
 	)
 
-	clientState, err := GetState(clientConn, seq)
+	writerState, err := NewConnState(version, suite, seq)
 	require.NoError(t, err)
-	serverState, err := GetState(serverConn, seq)
+	readerState, err := NewConnState(version, suite, seq)
 	require.NoError(t, err)
 
 	_, err = rand.Read(secret[:])
@@ -150,11 +122,11 @@ func TestReadRecords(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, msg := range msgs {
-		_, err = WriteRecord(buf, []byte(msg), clientState, secret, iv)
+		_, err = WriteRecord(buf, []byte(msg), writerState, secret, iv)
 		require.NoError(t, err)
 	}
 
-	results := ReadRecords(buf, serverState, secret, iv)
+	results := ReadRecords(buf, readerState, secret, iv)
 	require.Equal(t, len(msgs), len(results))
 	for i := 0; i < len(results); i++ {
 		require.NoError(t, results[i].Err)
