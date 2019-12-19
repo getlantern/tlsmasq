@@ -71,7 +71,6 @@ func TestHijack(t *testing.T) {
 	require.NoError(t, err)
 	_, err = rand.Read(iv[:])
 	require.NoError(t, err)
-	defer wg.Wait()
 
 	clientTransport, serverTransport := net.Pipe()
 	clientConn := ptlshs.NewConn(clientTransport, version, suite, seq, iv)
@@ -103,4 +102,6 @@ func TestHijack(t *testing.T) {
 	n, err := hijackedClient.Read(b)
 	require.NoError(t, err)
 	require.Equal(t, serverMsg, string(b[:n]))
+
+	wg.Wait()
 }

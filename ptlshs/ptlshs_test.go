@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProxiedTLS(t *testing.T) {
+func TestListenAndDial(t *testing.T) {
 	t.Parallel()
 
 	var (
@@ -23,8 +23,6 @@ func TestProxiedTLS(t *testing.T) {
 		secret               [52]byte
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
-	defer wg.Wait()
-
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
@@ -35,7 +33,6 @@ func TestProxiedTLS(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
 		conn, err := proxiedL.Accept()
 		require.NoError(t, err)
 		require.NoError(t, conn.(*tls.Conn).Handshake())
@@ -77,6 +74,8 @@ func TestProxiedTLS(t *testing.T) {
 	n, err := conn.Read(b)
 	require.NoError(t, err)
 	require.Equal(t, serverMsg, string(b[:n]))
+
+	wg.Wait()
 }
 
 func TestSignalReplay(t *testing.T) {
