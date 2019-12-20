@@ -80,10 +80,10 @@ func TestReadAndWrite(t *testing.T) {
 			_, err = WriteRecord(buf, []byte(msg), writerState, secret, iv)
 			require.NoError(t, err)
 
-			roundTripped, err := ReadRecord(buf, readerState, secret, iv)
+			roundTripped, unprocessed, err := ReadRecord(buf, readerState, secret, iv)
 			require.NoError(t, err)
-
 			require.Equal(t, msg, string(roundTripped))
+			require.Equal(t, 0, len(unprocessed))
 		}
 	}
 
@@ -130,6 +130,6 @@ func TestReadRecords(t *testing.T) {
 	require.Equal(t, len(msgs), len(results))
 	for i := 0; i < len(results); i++ {
 		require.NoError(t, results[i].Err)
-		require.Equal(t, msgs[i], string(results[i].Read))
+		require.Equal(t, msgs[i], string(results[i].Data))
 	}
 }

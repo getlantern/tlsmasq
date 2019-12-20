@@ -25,6 +25,9 @@ type listener struct {
 }
 
 func (l listener) Accept() (net.Conn, error) {
+	// TODO: if the Accept function blocks when proxying a connection (from say, an active probe),
+	// then the typical pattern of accept loops will not work. Think about how to resolve this.
+
 	clientConn, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
@@ -68,7 +71,6 @@ func (l listener) Accept() (net.Conn, error) {
 			return
 		}
 		version, suite = serverHello.Version, serverHello.Suite
-		var seq [8]byte
 		seq, iv, err = deriveSeqAndIV(serverHello.Random)
 		if err != nil {
 			tryToSend(errOnReadFromProxied, fmt.Errorf("failed to derive sequence and IV: %w", err))
@@ -96,7 +98,7 @@ func (l listener) Accept() (net.Conn, error) {
 					// Only act if we successfully decrypted. Otherwise, assume this wasn't the signal.
 					continue
 				}
-				signal, err := parseCompletionSignal(result.Read)
+				signal, err := parseCompletionSignal(result.Data)
 				if err != nil {
 					// Again, only act if this looks like the signal.
 					tryToSend(l.NonFatalErrors, fmt.Errorf("decrypted record, but failed to parse signal: %w", err))

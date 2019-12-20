@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/tlsmasq/internal/reptls"
+	"github.com/getlantern/tlsmasq/internal/util"
 )
 
 type dialer struct {
@@ -56,7 +57,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 
 	mitmConn := mitm(conn, onClientRead, nil)
 	tlsConn := tls.Client(mitmConn, d.TLSConfig)
-	if err := handshakeContext(ctx, tlsConn); err != nil {
+	if err := util.HandshakeContext(ctx, tlsConn); err != nil {
 		return nil, err
 	}
 	if serverRandomErr != nil {
@@ -85,43 +86,12 @@ func (d dialer) signalComplete(tlsConn *tls.Conn, serverConn net.Conn, seq [8]by
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
+
 	_, err = reptls.WriteRecord(serverConn, signal[:], connState, d.Secret, iv)
 	if err != nil {
 		return err
 	}
 	return nil
-}
-
-// timeoutError implements net.Error.
-type timeoutError string
-
-func (err timeoutError) Error() string   { return string(err) }
-func (err timeoutError) Timeout() bool   { return true }
-func (err timeoutError) Temporary() bool { return false }
-
-// Attempts to execute a TLS handshake using the connection. If the handshake is not completed by
-// the context deadline, a timeoutError is returned and the connection is closed.
-//
-// Adapted from net/http.persistConn.addTLS.
-func handshakeContext(ctx context.Context, tlsConn *tls.Conn) error {
-	dl, ok := ctx.Deadline()
-	if !ok {
-		return tlsConn.Handshake()
-	}
-
-	timer := time.NewTimer(dl.Sub(time.Now()))
-	errc := make(chan error, 1)
-	go func() {
-		errc <- tlsConn.Handshake()
-		timer.Stop()
-	}()
-	select {
-	case err := <-errc:
-		return err
-	case <-timer.C:
-		tlsConn.Close()
-		return timeoutError("timed out during TLS handshake")
-	}
 }
 
 type mitmConn struct {

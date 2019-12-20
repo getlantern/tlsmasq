@@ -85,7 +85,7 @@ func WriteRecord(w io.Writer, data []byte, cs *ConnState, secret [52]byte, iv [1
 // ReadResult is the result of an attempt to read a TLS record. One of either read or err will be
 // non-nil.
 type ReadResult struct {
-	Read []byte
+	Data []byte
 	Err  error
 
 	// N is the number of bytes read off the reader including this record.
@@ -98,10 +98,16 @@ type ReadResult struct {
 // The input secret must be long enough to break into a key and MAC key for the connection's cipher
 // suite as needed.
 //
+// ReadRecord may "over-read" from r. In this case, unprocessed data is returned along with the
+// record data or error.
+//
 // ReadRecord is adapted from tls.Conn.readRecordOrCCS.
-func ReadRecord(r io.Reader, cs *ConnState, secret [52]byte, iv [16]byte) ([]byte, error) {
-	record, _, err := readRecord(r, new(bytes.Buffer), cs, secret, iv, recordTypeApplicationData)
-	return record, err
+func ReadRecord(
+	r io.Reader, cs *ConnState, secret [52]byte, iv [16]byte) (data []byte, unprocessed []byte, err error) {
+
+	buf := new(bytes.Buffer)
+	record, _, err := readRecord(r, buf, cs, secret, iv, recordTypeApplicationData)
+	return record, buf.Bytes(), err
 }
 
 // ReadRecords is like ReadRecord, but attempts to read all records in r. Results will be returned

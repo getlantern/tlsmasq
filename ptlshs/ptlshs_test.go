@@ -141,7 +141,7 @@ func TestSignalReplay(t *testing.T) {
 				lastN = result.N
 				continue
 			}
-			_, err := parseCompletionSignal(result.Read)
+			_, err := parseCompletionSignal(result.Data)
 			if err != nil {
 				// Again, assume this wasn't the signal.
 				lastN = result.N

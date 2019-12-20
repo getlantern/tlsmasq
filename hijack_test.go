@@ -1,11 +1,13 @@
 package tlsmasq
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/getlantern/tlsmasq/ptlshs"
 	"github.com/stretchr/testify/require"
@@ -56,7 +58,8 @@ func TestHijack(t *testing.T) {
 			Certificates:       []tls.Certificate{cert},
 		}
 
-		wg = new(sync.WaitGroup)
+		timeout = time.Second
+		wg      = new(sync.WaitGroup)
 
 		secret ptlshs.Secret
 		seq    [8]byte
@@ -92,7 +95,10 @@ func TestHijack(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	hijackedClient, err := hijack(clientConn, tlsCfg, secret)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	hijackedClient, err := hijack(ctx, clientConn, tlsCfg, secret)
 	require.NoError(t, err)
 
 	_, err = hijackedClient.Write([]byte(clientMsg))

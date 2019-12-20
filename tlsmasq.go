@@ -57,7 +57,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, err
 	}
-	conn, err = hijack(conn.(*ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeOpts.Secret)
+	conn, err = hijack(ctx, conn.(*ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeOpts.Secret)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hijack connection: %w", err)
 	}

@@ -2,12 +2,14 @@ package tlsmasq
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 
 	"github.com/getlantern/tlsmasq/internal/reptls"
+	"github.com/getlantern/tlsmasq/internal/util"
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
@@ -22,17 +24,17 @@ import (
 // to use a tls.Config which does not support this version and/or suite. However, it is important to
 // set fields like cfg.CipherSuites and cfg.MinVersion to ensure that the security parameters of the
 // hijacked connection are acceptable.
-func hijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
+func hijack(ctx context.Context, conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
 	cfg, err := ensureParameters(cfg, conn)
 	if err != nil {
 		return nil, err
 	}
-	disguisedConn, err := disguise(conn.Conn, conn, preshared)
+	disguisedConn, err := disguise(conn.Conn, conn, preshared, "client")
 	if err != nil {
 		return nil, err
 	}
 	hijackedConn := tls.Client(disguisedConn, cfg)
-	if err := hijackedConn.Handshake(); err != nil {
+	if err := util.HandshakeContext(ctx, hijackedConn); err != nil {
 		return nil, fmt.Errorf("hijack handshake failed: %w", err)
 	}
 
@@ -51,7 +53,7 @@ func allowHijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (n
 	if err != nil {
 		return nil, err
 	}
-	disguisedConn, err := disguise(conn.Conn, conn, preshared)
+	disguisedConn, err := disguise(conn.Conn, conn, preshared, "server")
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +113,9 @@ type disguisedConn struct {
 	preshared ptlshs.Secret
 	iv        [16]byte
 
-	readBuf *bytes.Buffer
+	// processed holds data unwrapped from TLS records.
+	// unprocessed holds data which is either not yet unwrapped or was not wrapped to begin with.
+	processed, unprocessed *bytes.Buffer
 
 	// When set, this connection will disguise writes as TLS records using the parameters of
 	// ptlshsConn and the pre-shared secret. Reads will be assumed to be disguised as well.
@@ -119,16 +123,23 @@ type disguisedConn struct {
 	inDisguise bool
 }
 
-func disguise(conn net.Conn, parameters *ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
+// func disguise(conn net.Conn, parameters *ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
+func disguise(conn net.Conn, parameters *ptlshs.Conn, preshared ptlshs.Secret, name string) (*disguisedConn, error) {
 	state, err := reptls.NewConnState(parameters.TLSVersion(), parameters.CipherSuite(), parameters.NextSeq())
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive connection state: %w", err)
 	}
-	return &disguisedConn{conn, state, preshared, parameters.IV(), new(bytes.Buffer), true}, nil
+	return &disguisedConn{
+		conn, state, preshared, parameters.IV(), new(bytes.Buffer), new(bytes.Buffer), true,
+	}, nil
 }
 
 func (dc *disguisedConn) Read(b []byte) (n int, err error) {
-	n, err = dc.readBuf.Read(b)
+	if !dc.inDisguise {
+		return io.MultiReader(dc.processed, dc.unprocessed, dc.Conn).Read(b)
+	}
+
+	n, err = dc.processed.Read(b)
 	if err != nil && err != io.EOF {
 		return
 	}
@@ -136,20 +147,16 @@ func (dc *disguisedConn) Read(b []byte) (n int, err error) {
 		return
 	}
 
-	if !dc.inDisguise {
-		return dc.Conn.Read(b[n:])
+	connReader := io.MultiReader(dc.unprocessed, dc.Conn)
+	record, unprocessed, err := reptls.ReadRecord(connReader, dc.state, dc.preshared, dc.iv)
+	if err != nil {
+		return n, fmt.Errorf("failed to unwrap TLS record: %w", err)
 	}
-
-	for _, result := range reptls.ReadRecords(dc.Conn, dc.state, dc.preshared, dc.iv) {
-		if result.Err != nil {
-			return 0, fmt.Errorf("failed to read TLS record: %w", err)
-		}
-		// Note: bytes.Buffer.Write always returns a nil error.
-		dc.readBuf.Write(result.Read)
-	}
-
-	currentN, err := dc.readBuf.Read(b[n:])
-	n += currentN
+	nCopied := copy(b[n:], record)
+	n += nCopied
+	// Note: writes to bytes.Buffers do not return errors.
+	dc.processed.Write(record[nCopied:])
+	dc.unprocessed.Write(unprocessed)
 	return
 }
 
