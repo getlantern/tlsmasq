@@ -43,8 +43,8 @@ func parseCompletionSignal(b []byte) (*ptlsSignal, error) {
 	return &s, nil
 }
 
-func (s ptlsSignal) getNonce() nonce {
-	n := nonce{}
+func (s ptlsSignal) getNonce() Nonce {
+	n := Nonce{}
 	copy(n[:], s[len(ptlsSignalPrefix):])
 	return n
 }

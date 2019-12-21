@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-// A nonce used in proxied TLS handshakes. This is used to ensure that the completion signal (sent
+// A Nonce used in proxied TLS handshakes. This is used to ensure that the completion signal (sent
 // by the client after a completed handshake) is not replayable.
-type nonce [32]byte
+type Nonce [32]byte
 
-func newNonce(ttl time.Duration) (*nonce, error) {
-	n := nonce{}
+func newNonce(ttl time.Duration) (*Nonce, error) {
+	n := Nonce{}
 	binary.LittleEndian.PutUint64(n[:], uint64(time.Now().Add(ttl).UnixNano()))
 	if _, err := rand.Read(n[8:]); err != nil {
 		return nil, fmt.Errorf("failed to generate random bytes: %w", err)
@@ -21,7 +21,7 @@ func newNonce(ttl time.Duration) (*nonce, error) {
 	return &n, nil
 }
 
-func (n nonce) expiration() time.Time {
+func (n Nonce) expiration() time.Time {
 	return time.Unix(0, int64(binary.LittleEndian.Uint64(n[:])))
 }
 
@@ -39,7 +39,7 @@ type nonceCache struct {
 	bucketDiff time.Duration
 
 	evictions   chan time.Time
-	buckets     map[time.Time]map[nonce]bool
+	buckets     map[time.Time]map[Nonce]bool
 	bucketsLock sync.Mutex
 
 	done      chan struct{}
@@ -49,13 +49,13 @@ type nonceCache struct {
 func newNonceCache(sweepEvery time.Duration) *nonceCache {
 	nc := nonceCache{
 		time.Now(), sweepEvery, make(chan time.Time),
-		map[time.Time]map[nonce]bool{}, sync.Mutex{}, make(chan struct{}), sync.Once{},
+		map[time.Time]map[Nonce]bool{}, sync.Mutex{}, make(chan struct{}), sync.Once{},
 	}
 	go nc.startEvictor()
 	return &nc
 }
 
-func (nc *nonceCache) isValid(n nonce) bool {
+func (nc *nonceCache) isValid(n Nonce) bool {
 	expiration := n.expiration()
 	if time.Now().After(expiration) {
 		return false
@@ -71,14 +71,14 @@ func (nc *nonceCache) isValid(n nonce) bool {
 	return true
 }
 
-func (nc *nonceCache) getBucket(exp time.Time) map[nonce]bool {
+func (nc *nonceCache) getBucket(exp time.Time) map[Nonce]bool {
 	diff := exp.Sub(nc.startTime)
 	bucketTime := nc.startTime.Add(diff - (diff % nc.bucketDiff) + nc.bucketDiff)
 
 	nc.bucketsLock.Lock()
 	bucket, ok := nc.buckets[bucketTime]
 	if !ok {
-		bucket = map[nonce]bool{}
+		bucket = map[Nonce]bool{}
 		nc.buckets[bucketTime] = bucket
 	}
 	nc.bucketsLock.Unlock()

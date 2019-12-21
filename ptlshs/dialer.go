@@ -36,27 +36,11 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, err
 	}
-	type proxiedHandshakeResult struct {
-		conn *Conn
-		err  error
-	}
-	resultC := make(chan proxiedHandshakeResult, 1)
-	go func() {
-		conn, err := d.doProxiedHandshake(conn)
-		resultC <- proxiedHandshakeResult{conn, err}
-	}()
-	select {
-	case result := <-resultC:
-		return result.conn, result.err
-	case <-ctx.Done():
-		conn.Close()
-		// Note: context.DeadlineExceeded implements net.Error, as we'd like.
-		return nil, ctx.Err()
-	}
+	return Client(conn, d.TLSConfig, d.Secret, d.NonceTTL), nil
 }
 
 // Executes the client side of the ptlshs protocol. Returns if the input connection is closed.
-func (d dialer) doProxiedHandshake(conn net.Conn) (*Conn, error) {
+func (d dialer) doProxiedHandshake(conn net.Conn) (*OldConn, error) {
 	var (
 		serverRandom    []byte
 		serverRandomErr error
@@ -92,7 +76,7 @@ func (d dialer) doProxiedHandshake(conn net.Conn) (*Conn, error) {
 		return nil, fmt.Errorf("failed to signal completion of fake handshake: %w", err)
 	}
 	cs := tlsConn.ConnectionState()
-	return &Conn{conn, cs.Version, cs.CipherSuite, seq, iv, sync.Mutex{}}, nil
+	return &OldConn{conn, cs.Version, cs.CipherSuite, seq, iv, sync.Mutex{}}, nil
 }
 
 func (d dialer) signalComplete(tlsConn *tls.Conn, serverConn net.Conn, seq [8]byte, iv [16]byte) error {

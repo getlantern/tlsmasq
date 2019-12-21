@@ -17,7 +17,7 @@ func TestNonceCache(t *testing.T) {
 
 	// For the first batch, use an expiration such that all will be evicted in the first sweep.
 	firstExpiration := time.Now().Add(sweepEvery / 2)
-	firstBatch := []nonce{}
+	firstBatch := []Nonce{}
 	for i := 0; i < perBatch; i++ {
 		n, err := newNonce(time.Until(firstExpiration))
 		require.NoError(t, err)
@@ -26,7 +26,7 @@ func TestNonceCache(t *testing.T) {
 
 	// We will have a second batch with a much later expiration.
 	secondExpiration := time.Now().Add(sweepEvery * 10)
-	secondBatch := []nonce{}
+	secondBatch := []Nonce{}
 	for i := 0; i < perBatch; i++ {
 		n, err := newNonce(time.Until(secondExpiration))
 		require.NoError(t, err)
@@ -69,8 +69,8 @@ func (nc *nonceCache) count() int {
 }
 
 // add, but don't append.
-func add(n ...[]nonce) []nonce {
-	result := []nonce{}
+func add(n ...[]Nonce) []Nonce {
+	result := []Nonce{}
 	for _, a := range n {
 		result = append(result, a...)
 	}
