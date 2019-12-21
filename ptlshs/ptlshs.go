@@ -72,9 +72,6 @@ func DialTimeout(network, address string, opts DialerOpts, timeout time.Duration
 	return WrapDialer(&net.Dialer{}, opts).DialContext(ctx, network, address)
 }
 
-// TODO: ListenerOpts.DialProxied should perhaps just be AddrToProxied since we'll always need to
-// dial TCP to proxied servers
-
 // ListenerOpts specifies options for listening.
 type ListenerOpts struct {
 	// DialProxied is used to create TCP connections to the proxied server. Must not be nil.
