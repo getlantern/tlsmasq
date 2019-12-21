@@ -257,6 +257,8 @@ func (c *serverConn) Handshake() error {
 }
 
 func (c *serverConn) handshake() error {
+	// TODO: see if we can distinguish proxying and return a special error
+
 	ctx, stop := context.WithCancel(context.Background())
 	errGroup, ctx := errgroup.WithContext(ctx)
 	defer stop()

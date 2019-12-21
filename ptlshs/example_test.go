@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -38,6 +39,11 @@ func Example() {
 	go func() {
 		for {
 			conn, err := l.Accept()
+			if err != nil && strings.Contains(err.Error(), "use of closed network connection") {
+				// This is an unexported error indicating that the connection is closed.
+				// See https://golang.org/pkg/internal/poll/#pkg-variables
+				return
+			}
 			if err != nil {
 				panic(err)
 			}
@@ -63,13 +69,6 @@ func Example() {
 	if err != nil {
 		panic(err)
 	}
-	// Make sure there was actually a handshake with the TLS server. This is not necessary, we're
-	// just demonstrating that the handshake actually occurred.
-	select {
-	case <-successfulHandshakes:
-	case <-time.After(100 * time.Millisecond):
-		panic("no handshake with TLS server")
-	}
 
 	// We can use the connection like any other now.
 	if _, err := conn.Write([]byte(clientMsg)); err != nil {
@@ -80,6 +79,14 @@ func Example() {
 		panic(err)
 	}
 	fmt.Println("received message from the server:", string(b))
+
+	// Make sure there was actually a handshake with the TLS server. This is not necessary, we're
+	// just demonstrating that the handshake actually occurred.
+	select {
+	case <-successfulHandshakes:
+	case <-time.After(100 * time.Millisecond):
+		panic("no handshake with TLS server")
+	}
 
 	// Try connecting to the server with an unsuspecting HTTPS client. The connection will simply be
 	// proxied to the TLS server.

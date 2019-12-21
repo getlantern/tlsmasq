@@ -161,12 +161,14 @@ func TestSignalReplay(t *testing.T) {
 	go func() {
 		for i := 0; i < 2; i++ {
 			conn, err := l.Accept()
-			if i > 0 {
-				// The second one is supposed to fail.
-				return
-			}
 			require.NoError(t, err)
-			conn.Write([]byte(serverMsg))
+			_, err = conn.(Conn).Write([]byte(serverMsg))
+			if i == 0 {
+				require.NoError(t, err)
+			} else {
+				// The second one is supposed to fail.
+				require.Error(t, err)
+			}
 		}
 	}()
 
@@ -174,6 +176,7 @@ func TestSignalReplay(t *testing.T) {
 	dialerOpts := DialerOpts{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: secret}
 	conn, err := DialTimeout("tcp", l.Addr().String(), dialerOpts, timeout)
 	require.NoError(t, err)
+	require.NoError(t, conn.(Conn).Handshake())
 	conn.Close()
 
 	var encryptedSignal []byte
@@ -255,10 +258,15 @@ func progressionToProxyHelper(t *testing.T, clientCloses bool) {
 	require.NoError(t, err)
 	defer l.Close()
 
-	// We expect the Accept function to run for the duration of the test as it is serving as a
+	// We expect the Handshake function to run for the duration of the test as it is serving as a
 	// proxy to proxiedL.
 	wg.Add(1)
-	go func() { l.Accept(); wg.Done() }()
+	go func() {
+		conn, err := l.Accept()
+		require.NoError(t, err)
+		conn.(Conn).Handshake()
+		wg.Done()
+	}()
 
 	conn, err := tls.DialWithDialer(
 		&net.Dialer{Timeout: timeout},
