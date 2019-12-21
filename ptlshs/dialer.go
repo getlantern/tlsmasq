@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/getlantern/tlsmasq/internal/reptls"
-	"github.com/getlantern/tlsmasq/internal/util"
 )
 
 type dialer struct {
@@ -37,7 +36,27 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, err
 	}
+	type proxiedHandshakeResult struct {
+		conn *Conn
+		err  error
+	}
+	resultC := make(chan proxiedHandshakeResult, 1)
+	go func() {
+		conn, err := d.doProxiedHandshake(conn)
+		resultC <- proxiedHandshakeResult{conn, err}
+	}()
+	select {
+	case result := <-resultC:
+		return result.conn, result.err
+	case <-ctx.Done():
+		conn.Close()
+		// Note: context.DeadlineExceeded implements net.Error, as we'd like.
+		return nil, ctx.Err()
+	}
+}
 
+// Executes the client side of the ptlshs protocol. Returns if the input connection is closed.
+func (d dialer) doProxiedHandshake(conn net.Conn) (*Conn, error) {
 	var (
 		serverRandom    []byte
 		serverRandomErr error
@@ -46,7 +65,6 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 		if serverRandom != nil || serverRandomErr != nil {
 			return
 		}
-
 		serverHello, err := reptls.ParseServerHello(b)
 		if err != nil {
 			serverRandomErr = err
@@ -57,7 +75,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 
 	mitmConn := mitm(conn, onClientRead, nil)
 	tlsConn := tls.Client(mitmConn, d.TLSConfig)
-	if err := util.HandshakeContext(ctx, tlsConn); err != nil {
+	if err := tlsConn.Handshake(); err != nil {
 		return nil, err
 	}
 	if serverRandomErr != nil {

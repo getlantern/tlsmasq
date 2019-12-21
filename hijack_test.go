@@ -1,7 +1,6 @@
 package tlsmasq
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"net"
@@ -95,12 +94,21 @@ func TestHijack(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	hijackedConnChan := make(chan net.Conn)
+	go func() {
+		hijackedClient, err := hijack(clientConn, tlsCfg, secret)
+		require.NoError(t, err)
+		hijackedConnChan <- hijackedClient
+	}()
 
-	hijackedClient, err := hijack(ctx, clientConn, tlsCfg, secret)
-	require.NoError(t, err)
+	var hijackedClient net.Conn
+	select {
+	case hijackedClient = <-hijackedConnChan:
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for hijack")
+	}
 
+	hijackedClient.SetDeadline(time.Now().Add(timeout))
 	_, err = hijackedClient.Write([]byte(clientMsg))
 	require.NoError(t, err)
 

@@ -67,7 +67,9 @@ func Dial(network, address string, opts DialerOpts) (net.Conn, error) {
 
 // DialTimeout acts like Dial but takes a timeout.
 func DialTimeout(network, address string, opts DialerOpts, timeout time.Duration) (net.Conn, error) {
-	return WrapDialer(&net.Dialer{Timeout: timeout}, opts).Dial(network, address)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return WrapDialer(&net.Dialer{}, opts).DialContext(ctx, network, address)
 }
 
 // TODO: ListenerOpts.DialProxied should perhaps just be AddrToProxied since we'll always need to

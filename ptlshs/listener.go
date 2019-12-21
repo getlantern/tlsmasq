@@ -85,11 +85,6 @@ func (l listener) Accept() (net.Conn, error) {
 		close(serverHelloParsed)
 	}
 	onReadFromClient := func(b []byte) {
-		// Although these callbacks will be invoked asynchronously, we are able to rely on inherent
-		// synchnronicity in the network connection: the server hello will be processed by us
-		// (resulting in a connection state on connStateChan) before the client sees it. Thus, we
-		// can know that the connection state will be ready here before we get the completion signal
-		// from the client.
 		select {
 		case <-serverHelloParsed:
 			results := reptls.ReadRecords(bytes.NewReader(b), connState, l.Secret, iv)
@@ -109,8 +104,8 @@ func (l listener) Accept() (net.Conn, error) {
 					tryToSend(l.NonFatalErrors, errors.New("received bad nonce; likely a signal replay"))
 					continue
 				}
-				stop()
 				postSignalData.Write(b[result.N:])
+				stop()
 			}
 		case <-ctx.Done():
 			// At this point, we just need to hold on to anything read from the client.

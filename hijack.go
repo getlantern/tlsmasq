@@ -2,14 +2,12 @@ package tlsmasq
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 
 	"github.com/getlantern/tlsmasq/internal/reptls"
-	"github.com/getlantern/tlsmasq/internal/util"
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
@@ -24,7 +22,7 @@ import (
 // to use a tls.Config which does not support this version and/or suite. However, it is important to
 // set fields like cfg.CipherSuites and cfg.MinVersion to ensure that the security parameters of the
 // hijacked connection are acceptable.
-func hijack(ctx context.Context, conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
+func hijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
 	cfg, err := ensureParameters(cfg, conn)
 	if err != nil {
 		return nil, err
@@ -34,7 +32,7 @@ func hijack(ctx context.Context, conn *ptlshs.Conn, cfg *tls.Config, preshared p
 		return nil, err
 	}
 	hijackedConn := tls.Client(disguisedConn, cfg)
-	if err := util.HandshakeContext(ctx, hijackedConn); err != nil {
+	if err := hijackedConn.Handshake(); err != nil {
 		return nil, fmt.Errorf("hijack handshake failed: %w", err)
 	}
 

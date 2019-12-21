@@ -28,6 +28,14 @@ type DialerOpts struct {
 	TLSConfig *tls.Config
 }
 
+func (opts DialerOpts) withDefaults() DialerOpts {
+	newOpts := opts
+	if opts.TLSConfig == nil {
+		newOpts.TLSConfig = &tls.Config{}
+	}
+	return newOpts
+}
+
 // Dialer is the interface implemented by network dialers.
 type Dialer interface {
 	Dial(network, address string) (net.Conn, error)
@@ -57,17 +65,33 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, err
 	}
-	conn, err = hijack(ctx, conn.(*ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeOpts.Secret)
-	if err != nil {
-		return nil, fmt.Errorf("failed to hijack connection: %w", err)
+
+	type hijackResult struct {
+		conn net.Conn
+		err  error
 	}
-	return conn, nil
+	resultChan := make(chan hijackResult, 1)
+	go func() {
+		conn, err = hijack(conn.(*ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeOpts.Secret)
+		resultChan <- hijackResult{conn, err}
+	}()
+	select {
+	case result := <-resultChan:
+		if result.err != nil {
+			return nil, fmt.Errorf("failed to hijack connection: %w", err)
+		}
+		return result.conn, nil
+	case <-ctx.Done():
+		conn.Close()
+		// Note: context.DeadlineExceeded implements net.Error, as we'd like.
+		return nil, ctx.Err()
+	}
 }
 
 // WrapDialer wraps the input dialer with a network dialer which will perform the tlsmasq protocol.
 // Dialing will result in TLS connections with peers.
 func WrapDialer(d Dialer, opts DialerOpts) Dialer {
-	return dialer{d, opts}
+	return dialer{d, opts.withDefaults()}
 }
 
 // Dial a tlsmasq listener. This will result in a TLS connection with the peer.
@@ -77,7 +101,9 @@ func Dial(network, address string, opts DialerOpts) (net.Conn, error) {
 
 // DialTimeout acts like Dial but takes a timeout.
 func DialTimeout(network, address string, opts DialerOpts, timeout time.Duration) (net.Conn, error) {
-	return WrapDialer(&net.Dialer{Timeout: timeout}, opts).Dial(network, address)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return WrapDialer(&net.Dialer{}, opts).DialContext(ctx, network, address)
 }
 
 // ListenerOpts specifies options for listening.
@@ -90,6 +116,14 @@ type ListenerOpts struct {
 	// during the proxied handshake. Thus it is important to set fields like CipherSuites and
 	// MinVersion to ensure that the security parameters of the hijacked connections are acceptable.
 	TLSConfig *tls.Config
+}
+
+func (opts ListenerOpts) withDefaults() ListenerOpts {
+	newOpts := opts
+	if opts.TLSConfig == nil {
+		newOpts.TLSConfig = &tls.Config{}
+	}
+	return newOpts
 }
 
 type listener struct {
@@ -113,7 +147,7 @@ func (l listener) Accept() (net.Conn, error) {
 // WrapListener wraps the input listener with one which speaks the tlsmasq protocol. Accepted
 // connections will be TLS connections.
 func WrapListener(l net.Listener, opts ListenerOpts) net.Listener {
-	return listener{ptlshs.WrapListener(l, opts.ProxiedHandshakeOpts), opts}
+	return listener{ptlshs.WrapListener(l, opts.ProxiedHandshakeOpts), opts.withDefaults()}
 }
 
 // Listen for tlsmasq dialers. Accepted connections will be TLS connections.
