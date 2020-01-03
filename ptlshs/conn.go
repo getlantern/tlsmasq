@@ -21,6 +21,7 @@ import (
 // connection state data (TLSVersion, CipherSuite, etc.) block until the handshake is complete.
 //
 // Connections returned by listeners and dialers in this package will implement this interface.
+// However, most users of this package can ignore this type.
 type Conn interface {
 	net.Conn
 
@@ -94,7 +95,8 @@ type clientConn struct {
 	handshakeComplete chan struct{}
 }
 
-// Client initializes a client-side connection.
+// Client initializes a client-side connection. The nonceTTL specifies the time-to-live for nonces
+// used in completion signals.
 func Client(toServer net.Conn, tlsCfg *tls.Config, preshared Secret, nonceTTL time.Duration) Conn {
 	return &clientConn{toServer, tlsCfg, preshared, nonceTTL, nil, nil, sync.Once{}, make(chan struct{})}
 }
@@ -231,12 +233,12 @@ type serverConn struct {
 	handshakeComplete chan struct{}
 }
 
-// Server initializes a new server-side connection.
-func Server(toClient, toProxied net.Conn,
-	preshared Secret, isValidNonce func(Nonce) bool, nonFatalErrors chan<- error) Conn {
-
+// Server initializes a server-side connection. The isValid function is used to determine nonce
+// validity for completion signals sent by the client. The channel nonFatal is used to communicate
+// non-fatal errors. These will likely be due to probes.
+func Server(toClient, toProxied net.Conn, preshared Secret, isValid func(Nonce) bool, nonFatal chan<- error) Conn {
 	return &serverConn{
-		toClient, toProxied, preshared, isValidNonce, nonFatalErrors, nil, nil, sync.Once{}, make(chan struct{}),
+		toClient, toProxied, preshared, isValid, nonFatal, nil, nil, sync.Once{}, make(chan struct{}),
 	}
 }
 
