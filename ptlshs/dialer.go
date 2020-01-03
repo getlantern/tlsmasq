@@ -3,15 +3,11 @@ package ptlshs
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/getlantern/tlsmasq/internal/reptls"
 )
 
 type dialer struct {
@@ -37,63 +33,6 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 		return nil, err
 	}
 	return Client(conn, d.TLSConfig, d.Secret, d.NonceTTL), nil
-}
-
-// Executes the client side of the ptlshs protocol. Returns if the input connection is closed.
-func (d dialer) doProxiedHandshake(conn net.Conn) (*OldConn, error) {
-	var (
-		serverRandom    []byte
-		serverRandomErr error
-	)
-	onClientRead := func(b []byte) {
-		if serverRandom != nil || serverRandomErr != nil {
-			return
-		}
-		serverHello, err := reptls.ParseServerHello(b)
-		if err != nil {
-			serverRandomErr = err
-			return
-		}
-		serverRandom = serverHello.Random
-	}
-
-	mitmConn := mitm(conn, onClientRead, nil)
-	tlsConn := tls.Client(mitmConn, d.TLSConfig)
-	if err := tlsConn.Handshake(); err != nil {
-		return nil, err
-	}
-	if serverRandomErr != nil {
-		return nil, fmt.Errorf("failed to parse server hello: %w", serverRandomErr)
-	}
-	if serverRandom == nil {
-		return nil, fmt.Errorf("never saw server hello")
-	}
-	seq, iv, err := deriveSeqAndIV(serverRandom)
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive sequence and IV: %w", err)
-	}
-	if err := d.signalComplete(tlsConn, conn, seq, iv); err != nil {
-		return nil, fmt.Errorf("failed to signal completion of fake handshake: %w", err)
-	}
-	cs := tlsConn.ConnectionState()
-	return &OldConn{conn, cs.Version, cs.CipherSuite, seq, iv, sync.Mutex{}}, nil
-}
-
-func (d dialer) signalComplete(tlsConn *tls.Conn, serverConn net.Conn, seq [8]byte, iv [16]byte) error {
-	connState, err := reptls.GetState(tlsConn, seq)
-	if err != nil {
-		return fmt.Errorf("failed to read connection state: %w", err)
-	}
-	signal, err := newCompletionSignal(d.NonceTTL)
-	if err != nil {
-		return fmt.Errorf("failed to create completion signal: %w", err)
-	}
-
-	_, err = reptls.WriteRecord(serverConn, signal[:], connState, d.Secret, iv)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 type mitmConn struct {
