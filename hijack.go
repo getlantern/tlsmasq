@@ -22,12 +22,15 @@ import (
 // to use a tls.Config which does not support this version and/or suite. However, it is important to
 // set fields like cfg.CipherSuites and cfg.MinVersion to ensure that the security parameters of the
 // hijacked connection are acceptable.
-func hijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
+func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
+	if err := conn.Handshake(); err != nil {
+		return nil, fmt.Errorf("proxied handshake failed: %w", err)
+	}
 	cfg, err := ensureParameters(cfg, conn)
 	if err != nil {
 		return nil, err
 	}
-	disguisedConn, err := disguise(conn.Conn, conn, preshared, "client")
+	disguisedConn, err := disguise(conn, preshared)
 	if err != nil {
 		return nil, err
 	}
@@ -46,12 +49,15 @@ func hijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Co
 // allowHijack is the server-side counterpart to hijack. Waits for the second handshake on the
 // connection, expecting the handshake to be disguised. Expects that the disguise will be shed when
 // the handshake is complete.
-func allowHijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
+func allowHijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
+	if err := conn.Handshake(); err != nil {
+		return nil, fmt.Errorf("proxied handshake failed: %w", err)
+	}
 	cfg, err := ensureParameters(cfg, conn)
 	if err != nil {
 		return nil, err
 	}
-	disguisedConn, err := disguise(conn.Conn, conn, preshared, "server")
+	disguisedConn, err := disguise(conn, preshared)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +73,7 @@ func allowHijack(conn *ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (n
 	return hijackedConn, nil
 }
 
-func ensureParameters(cfg *tls.Config, conn *ptlshs.Conn) (*tls.Config, error) {
+func ensureParameters(cfg *tls.Config, conn ptlshs.Conn) (*tls.Config, error) {
 	version, suite := conn.TLSVersion(), conn.CipherSuite()
 	if !suiteSupported(cfg, suite) {
 		return nil, fmt.Errorf("negotiated suite %#x is not supported", suite)
@@ -121,14 +127,13 @@ type disguisedConn struct {
 	inDisguise bool
 }
 
-// func disguise(conn net.Conn, parameters *ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
-func disguise(conn net.Conn, parameters *ptlshs.Conn, preshared ptlshs.Secret, name string) (*disguisedConn, error) {
-	state, err := reptls.NewConnState(parameters.TLSVersion(), parameters.CipherSuite(), parameters.NextSeq())
+func disguise(conn ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
+	state, err := reptls.NewConnState(conn.TLSVersion(), conn.CipherSuite(), conn.NextSeq())
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive connection state: %w", err)
 	}
 	return &disguisedConn{
-		conn, state, preshared, parameters.IV(), new(bytes.Buffer), new(bytes.Buffer), true,
+		conn, state, preshared, conn.IV(), new(bytes.Buffer), new(bytes.Buffer), true,
 	}, nil
 }
 

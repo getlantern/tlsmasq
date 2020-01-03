@@ -22,6 +22,9 @@ import (
 type Conn interface {
 	net.Conn
 
+	// Underlying connection to the peer.
+	Underlying() net.Conn
+
 	// Handshake performs the ptlshs handshake protocol, if it has not yet been performed. Note
 	// that, per the protocol, the connection will proxy all data until the completion signal. Thus,
 	// if this connection comes from an active probe, this handshake function may not return until
@@ -36,7 +39,7 @@ type Conn interface {
 	CipherSuite() uint16
 
 	// NextSeq increments and returns the connection's sequence number. The starting sequence number
-	// is derived from the server random in the proxied handshake. Client and servers will have the
+	// is derived from the server random in the proxied handshake. Clients and servers will have the
 	// same derived sequence numbers, so this can be used in cipher suites which use the sequence
 	// number as a nonce.
 	NextSeq() [8]byte
@@ -94,6 +97,10 @@ func Client(toServer net.Conn, tlsCfg *tls.Config, preshared Secret, nonceTTL ti
 	return &clientConn{toServer, tlsCfg, preshared, nonceTTL, nil, nil, sync.Once{}, make(chan struct{})}
 }
 
+func (c *clientConn) Underlying() net.Conn {
+	return c.Conn
+}
+
 func (c *clientConn) Read(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
 		return 0, fmt.Errorf("handshake failed: %w", err)
@@ -118,6 +125,7 @@ func (c *clientConn) Handshake() error {
 		c.handshakeErr = c.handshake()
 		close(c.handshakeComplete)
 	})
+	<-c.handshakeComplete
 	return c.handshakeErr
 }
 
@@ -230,6 +238,10 @@ func Server(toClient, toProxied net.Conn,
 	}
 }
 
+func (c *serverConn) Underlying() net.Conn {
+	return c.Conn
+}
+
 func (c *serverConn) Read(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
 		return 0, fmt.Errorf("handshake failed: %w", err)
@@ -252,7 +264,9 @@ func (c *serverConn) Write(b []byte) (n int, err error) {
 func (c *serverConn) Handshake() error {
 	c.shakeOnce.Do(func() {
 		c.handshakeErr = c.handshake()
+		close(c.handshakeComplete)
 	})
+	<-c.handshakeComplete
 	return c.handshakeErr
 }
 
@@ -275,10 +289,17 @@ func (c *serverConn) handshake() error {
 		iv                   [16]byte
 		serverHelloParsed    = make(chan struct{})
 		errOnReadFromProxied = make(chan error, 1)
-		postSignalData       = new(bytes.Buffer)
 		firstReadFromProxied = true
 
-		// Saved to be passed back in the Conn.
+		// Data read off the connection after the completion signal. We assume this is data intended
+		// for the real server.
+		postSignalData = new(bytes.Buffer)
+
+		// Data read off the connection before the completion signal and which has not yet been
+		// written to the proxied server. Only used once we have receieved the signal.
+		preSignalData = new(bytes.Buffer)
+
+		// Saved to be passed back in the returned connection.
 		version, suite uint16
 		seq            [8]byte
 	)
@@ -310,7 +331,7 @@ func (c *serverConn) handshake() error {
 		select {
 		case <-serverHelloParsed:
 			results := reptls.ReadRecords(bytes.NewReader(b), tlsState, c.preshared, iv)
-			for _, result := range results {
+			for i, result := range results {
 				if result.Err != nil {
 					// Only act if we successfully decrypted. Otherwise, assume this wasn't the signal.
 					continue
@@ -327,6 +348,9 @@ func (c *serverConn) handshake() error {
 					continue
 				}
 				postSignalData.Write(b[result.N:])
+				if i > 0 {
+					preSignalData.Write(b[:results[i-1].N])
+				}
 				stop()
 			}
 		case <-ctx.Done():
@@ -336,18 +360,9 @@ func (c *serverConn) handshake() error {
 		default:
 			return
 		}
-
-	}
-	onWriteToProxied := func(b []byte) {
-		select {
-		case <-ctx.Done():
-			// Closing the connection in this callback ensures that we are able to first write any
-			// remaining data to the proxied server.
-			c.toProxied.Close()
-		default:
-		}
 	}
 	errGroup.Go(func() error {
+		// TODO: think about allowing mitm callbacks to return errors
 		select {
 		case err := <-errOnReadFromProxied:
 			return err
@@ -355,8 +370,15 @@ func (c *serverConn) handshake() error {
 			return nil
 		}
 	})
+	errGroup.Go(func() error {
+		<-ctx.Done()
+		// Write the remaining data, but don't worry about whether it makes it.
+		c.toProxied.Write(preSignalData.Bytes())
+		c.toProxied.Close()
+		return nil
+	})
 
-	mitmToProxied := mitm(c.toProxied, onReadFromProxied, onWriteToProxied)
+	mitmToProxied := mitm(c.toProxied, onReadFromProxied, nil)
 	mitmToClient := mitm(c.Conn, onReadFromClient, nil)
 	errGroup.Go(func() error {
 		return netCopy(

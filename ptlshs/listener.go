@@ -51,8 +51,7 @@ func netCopy(ctx context.Context, dst, src namedConn, bufferSize int) error {
 	for {
 		n, err := src.Read(buf)
 		if isDone(ctx) {
-			// We write what we have left, but we don't worry about whether it makes it.
-			dst.Write(buf[:n])
+			// TODO: without knowledge of the MITM stuff, it seems like we're just dropping data
 			return nil
 		}
 		if isNonTemporary(err) {

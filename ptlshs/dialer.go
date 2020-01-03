@@ -102,7 +102,7 @@ type mitmConn struct {
 	closedByPeer    chan struct{}
 }
 
-// Sets up a MITM'd connection. Callbacks will be called synchronously. Either callback may be nil.
+// Sets up a MITM'd connection. Callbacks will be invoked synchronously. Either callback may be nil.
 func mitm(conn net.Conn, onRead, onWrite func([]byte)) mitmConn {
 	if onRead == nil {
 		onRead = func(_ []byte) {}

@@ -3,14 +3,83 @@ package tlsmasq
 import (
 	"crypto/rand"
 	"crypto/tls"
-	"net"
-	"sync"
 	"testing"
-	"time"
 
+	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsmasq/ptlshs"
+
 	"github.com/stretchr/testify/require"
 )
+
+func TestHijack(t *testing.T) {
+	t.Parallel()
+
+	// The choice of version and suite don't matter too much, but we will test with a suite
+	// which uses the sequence number as a nonce to ensure that path is tested.
+	const version, suite = tls.VersionTLS12, tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
+
+	var (
+		// The TLS config must allow for the version and suite we choose in the proxied handshake.
+		// For simplicity, we use the same config for the proxied handshake and hijacking.
+		tlsCfg = &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         version,
+			MaxVersion:         version,
+			CipherSuites:       []uint16{suite},
+			Certificates:       []tls.Certificate{cert},
+		}
+
+		secret ptlshs.Secret
+
+		// Not testing ptlshs.
+		isValidNonce = func(n ptlshs.Nonce) bool { return true }
+
+		clientMsg, serverMsg = "hello from the client", "hello from server"
+	)
+	_, err := rand.Read(secret[:])
+	require.NoError(t, err)
+
+	serverToProxied, proxiedToServer := testutil.BufferedPipe()
+	proxiedConn := tls.Server(proxiedToServer, tlsCfg)
+	go func() { require.NoError(t, proxiedConn.Handshake()) }()
+	defer serverToProxied.Close()
+	defer proxiedToServer.Close()
+
+	clientTransport, serverTransport := testutil.BufferedPipe()
+	clientConn := ptlshs.Client(clientTransport, tlsCfg, secret, 0)
+	serverConn := ptlshs.Server(serverTransport, serverToProxied, secret, isValidNonce, make(chan error))
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+
+		_, err := allowHijack(serverConn, tlsCfg, secret)
+		require.NoError(t, err)
+
+		b := make([]byte, len(clientMsg))
+		n, err := serverConn.Read(b)
+		require.NoError(t, err)
+		require.Equal(t, clientMsg, string(b[:n]))
+
+		_, err = serverConn.Write([]byte(serverMsg))
+		require.NoError(t, err)
+	}()
+
+	_, err = hijack(clientConn, tlsCfg, secret)
+	require.NoError(t, err)
+
+	_, err = clientConn.Write([]byte(clientMsg))
+	require.NoError(t, err)
+
+	b := make([]byte, len(serverMsg))
+	n, err := clientConn.Read(b)
+	require.NoError(t, err)
+	require.Equal(t, serverMsg, string(b[:n]))
+
+	<-done
+}
 
 var (
 	certPem = []byte(`-----BEGIN CERTIFICATE-----
@@ -39,83 +108,4 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func TestHijack(t *testing.T) {
-	t.Parallel()
-
-	// The choice of version and suite don't matter too much, but we will test with a suite
-	// which uses the sequence number as a nonce to ensure that path is tested.
-	const version, suite = tls.VersionTLS12, tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
-
-	var (
-		// The TLS config must allow for the version and suite we choose.
-		tlsCfg = &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         version,
-			CipherSuites:       []uint16{suite},
-			Certificates:       []tls.Certificate{cert},
-		}
-
-		timeout = time.Second
-		wg      = new(sync.WaitGroup)
-
-		secret ptlshs.Secret
-		seq    [8]byte
-		iv     [16]byte
-		err    error
-
-		clientMsg, serverMsg = "hello from the client", "hello from server"
-	)
-	_, err = rand.Read(secret[:])
-	require.NoError(t, err)
-	_, err = rand.Read(seq[:])
-	require.NoError(t, err)
-	_, err = rand.Read(iv[:])
-	require.NoError(t, err)
-
-	clientTransport, serverTransport := net.Pipe()
-	clientConn := ptlshs.NewConn(clientTransport, version, suite, seq, iv)
-	serverConn := ptlshs.NewConn(serverTransport, version, suite, seq, iv)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		hijackedServer, err := allowHijack(serverConn, tlsCfg, secret)
-		require.NoError(t, err)
-
-		b := make([]byte, len(clientMsg))
-		n, err := hijackedServer.Read(b)
-		require.NoError(t, err)
-		require.Equal(t, clientMsg, string(b[:n]))
-
-		_, err = hijackedServer.Write([]byte(serverMsg))
-		require.NoError(t, err)
-	}()
-
-	hijackedConnChan := make(chan net.Conn)
-	go func() {
-		hijackedClient, err := hijack(clientConn, tlsCfg, secret)
-		require.NoError(t, err)
-		hijackedConnChan <- hijackedClient
-	}()
-
-	var hijackedClient net.Conn
-	select {
-	case hijackedClient = <-hijackedConnChan:
-	case <-time.After(timeout):
-		t.Fatal("timed out waiting for hijack")
-	}
-
-	hijackedClient.SetDeadline(time.Now().Add(timeout))
-	_, err = hijackedClient.Write([]byte(clientMsg))
-	require.NoError(t, err)
-
-	b := make([]byte, len(serverMsg))
-	n, err := hijackedClient.Read(b)
-	require.NoError(t, err)
-	require.Equal(t, serverMsg, string(b[:n]))
-
-	wg.Wait()
 }

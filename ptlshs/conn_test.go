@@ -7,6 +7,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,11 +35,11 @@ func TestHandshake(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	serverToProxied, proxiedToServer := nonBlockingPipe()
+	serverToProxied, proxiedToServer := testutil.BufferedPipe()
 	proxiedConn := tls.Server(proxiedToServer, tlsCfg)
 	go proxiedConn.Handshake()
 
-	clientTransport, serverTransport := nonBlockingPipe()
+	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := Client(clientTransport, tlsCfg, secret, 0)
 	serverConn := Server(serverTransport, serverToProxied, secret, isValidNonce, make(chan error))
 

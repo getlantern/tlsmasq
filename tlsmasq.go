@@ -72,7 +72,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	}
 	resultChan := make(chan hijackResult, 1)
 	go func() {
-		conn, err = hijack(conn.(*ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeOpts.Secret)
+		conn, err = hijack(conn.(ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeOpts.Secret)
 		resultChan <- hijackResult{conn, err}
 	}()
 	select {
@@ -137,7 +137,7 @@ func (l listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	// We know the type assertion will succeed because we know l.Listener comes from ptlshs.
-	conn, err = allowHijack(conn.(*ptlshs.Conn), l.TLSConfig, l.ProxiedHandshakeOpts.Secret)
+	conn, err = allowHijack(conn.(ptlshs.Conn), l.TLSConfig, l.ProxiedHandshakeOpts.Secret)
 	if err != nil {
 		return nil, fmt.Errorf("failed while negotiating hijack: %w", err)
 	}
