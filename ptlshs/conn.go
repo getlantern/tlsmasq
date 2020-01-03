@@ -6,7 +6,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -447,4 +449,107 @@ func (c *serverConn) IV() [16]byte {
 		return [16]byte{}
 	}
 	return c.state.iv
+}
+
+type mitmConn struct {
+	net.Conn
+	onRead, onWrite func([]byte)
+	closedByPeer    chan struct{}
+}
+
+// Sets up a MITM'd connection. Callbacks will be invoked synchronously. Either callback may be nil.
+func mitm(conn net.Conn, onRead, onWrite func([]byte)) mitmConn {
+	if onRead == nil {
+		onRead = func(_ []byte) {}
+	}
+	if onWrite == nil {
+		onWrite = func(_ []byte) {}
+	}
+	return mitmConn{conn, onRead, onWrite, make(chan struct{})}
+}
+
+func (c mitmConn) Read(b []byte) (n int, err error) {
+	n, err = c.Conn.Read(b)
+	if n > 0 {
+		c.onRead(b[:n])
+	}
+	if err == io.EOF {
+		// This is an unexported error indicating that the connection is closed.
+		// See https://golang.org/pkg/internal/poll/#pkg-variables
+		close(c.closedByPeer)
+	}
+	return
+}
+
+func (c mitmConn) Write(b []byte) (n int, err error) {
+	n, err = c.Conn.Write(b)
+	if n > 0 {
+		c.onWrite(b[:n])
+	}
+	if err != nil && strings.Contains(err.Error(), "use of closed network connection") {
+		// This is an unexported error indicating that the connection is closed.
+		// See https://golang.org/pkg/internal/poll/#pkg-variables
+		close(c.closedByPeer)
+	}
+	return
+}
+
+type namedConn struct {
+	net.Conn
+	name string
+}
+
+// Copies from src to dst until the context is done.
+func netCopy(ctx context.Context, dst, src namedConn, bufferSize int) error {
+	if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
+		src.SetDeadline(deadline)
+		dst.SetDeadline(deadline)
+	}
+	buf := make([]byte, bufferSize)
+	for {
+		n, err := src.Read(buf)
+		if isDone(ctx) {
+			// TODO: without knowledge of the MITM stuff, it seems like we're just dropping data
+			return nil
+		}
+		if isNonTemporary(err) {
+			return fmt.Errorf("failed to read from %s: %w", src.name, err)
+		}
+		_, err = dst.Write(buf[:n])
+		if isDone(ctx) {
+			return nil
+		}
+		if isNonTemporary(err) {
+			return fmt.Errorf("failed to write to %s: %w", dst.name, err)
+		}
+	}
+}
+
+func isNonTemporary(err error) bool {
+	if err == nil {
+		return false
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
+		return false
+	}
+	return true
+}
+
+func isDone(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+func deriveSeqAndIV(serverRandom []byte) (seq [8]byte, iv [16]byte, err error) {
+	if len(serverRandom) < len(seq)+len(iv) {
+		return seq, iv, fmt.Errorf(
+			"expected larger server random (should be 32 bytes, got %d)", len(serverRandom))
+	}
+	copy(seq[:], serverRandom)
+	copy(iv[:], serverRandom[len(seq):])
+	return seq, iv, nil
 }

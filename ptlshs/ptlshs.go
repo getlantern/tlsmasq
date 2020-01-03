@@ -7,6 +7,7 @@ package ptlshs
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"time"
 )
@@ -18,6 +19,10 @@ const (
 	// DefaultNonceSweepInterval is used when ListenerOpts.NonceSweepInterval is not specified.
 	DefaultNonceSweepInterval = time.Minute
 )
+
+// This should be plenty large enough for handshake records. In the event that the connection
+// becomes a fully proxied connection, we may split records up, but that's not a problem.
+const listenerReadBufferSize = 1024
 
 // A Secret pre-shared between listeners and dialers. This is used to secure the completion signal
 // sent by the dialer.
@@ -53,6 +58,31 @@ func (opts DialerOpts) withDefaults() DialerOpts {
 type Dialer interface {
 	Dial(network, address string) (net.Conn, error)
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+type dialer struct {
+	Dialer
+	DialerOpts
+}
+
+func (d dialer) Dial(network, address string) (net.Conn, error) {
+	return d.DialContext(context.Background(), network, address)
+}
+
+func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	// Respect any timeout or deadline on the wrapped dialer.
+	if netDialer, ok := d.Dialer.(*net.Dialer); ok {
+		if deadline := earliestDeadline(netDialer); !deadline.IsZero() {
+			var cancel func()
+			ctx, cancel = context.WithDeadline(ctx, deadline)
+			defer cancel()
+		}
+	}
+	conn, err := d.Dialer.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	return Client(conn, d.TLSConfig, d.Secret, d.NonceTTL), nil
 }
 
 // WrapDialer wraps the input dialer with a network dialer which will perform the ptlshs protocol.
@@ -100,6 +130,32 @@ func (opts ListenerOpts) withDefaults() ListenerOpts {
 	return newOpts
 }
 
+type listener struct {
+	net.Listener
+	ListenerOpts
+	nonceCache *nonceCache
+}
+
+func (l listener) Accept() (net.Conn, error) {
+	// TODO: if the Accept function blocks when proxying a connection (from say, an active probe),
+	// then the typical pattern of accept loops will not work. Think about how to resolve this.
+
+	clientConn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	toProxied, err := l.DialProxied()
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial proxied server: %w", err)
+	}
+	return Server(clientConn, toProxied, l.Secret, l.nonceCache.isValid, l.NonFatalErrors), nil
+}
+
+func (l listener) Close() error {
+	l.nonceCache.close()
+	return l.Listener.Close()
+}
+
 // WrapListener wraps the input listener with one which speaks the ptlshs protocol.
 func WrapListener(l net.Listener, opts ListenerOpts) net.Listener {
 	opts = opts.withDefaults()
@@ -113,4 +169,22 @@ func Listen(network, address string, opts ListenerOpts) (net.Listener, error) {
 		return nil, err
 	}
 	return WrapListener(l, opts), nil
+}
+
+// Returns the earliest of:
+//   - time.Now()+Timeout
+//   - d.Deadline
+// Or zero, if neither Timeout nor Deadline are set.
+func earliestDeadline(d *net.Dialer) time.Time {
+	if d.Timeout == 0 && d.Deadline.IsZero() {
+		return time.Time{}
+	}
+	if d.Timeout == 0 {
+		return d.Deadline
+	}
+	timeoutExpiration := time.Now().Add(d.Timeout)
+	if d.Deadline.IsZero() || timeoutExpiration.Before(d.Deadline) {
+		return timeoutExpiration
+	}
+	return d.Deadline
 }
