@@ -1,10 +1,8 @@
 package ptlshs
 
 import (
-	"bufio"
 	"crypto/rand"
 	"crypto/tls"
-	"net"
 	"testing"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
@@ -51,27 +49,4 @@ func TestHandshake(t *testing.T) {
 
 	require.NoError(t, clientConn.Handshake())
 	<-done
-}
-
-// Like net.Pipe(), but with internal buffering on writes. In practice, our connections are
-// generally TCP connections, for which writes will not block.
-func nonBlockingPipe() (net.Conn, net.Conn) {
-	rx, tx := net.Pipe()
-	return newBufferedConn(rx), newBufferedConn(tx)
-}
-
-// Buffers writes to the connection.
-type bufferedConn struct {
-	net.Conn
-	bufW *bufio.Writer
-}
-
-func newBufferedConn(conn net.Conn) bufferedConn {
-	return bufferedConn{conn, bufio.NewWriter(conn)}
-}
-
-func (conn bufferedConn) Write(b []byte) (n int, err error) {
-	n, err = conn.bufW.Write(b)
-	go conn.bufW.Flush()
-	return
 }
