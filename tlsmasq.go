@@ -16,10 +16,10 @@ import (
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
-// DialerOpts specifies options for dialing.
-type DialerOpts struct {
-	// ProxiedHandshakeOpts specifies options for the proxied handshake.
-	ProxiedHandshakeOpts ptlshs.DialerOpts
+// DialerConfig specifies configuration for dialing.
+type DialerConfig struct {
+	// ProxiedHandshakeConfig specifies configuration for the proxied handshake.
+	ProxiedHandshakeConfig ptlshs.DialerConfig
 
 	// TLSConfig specifies configuration for the hijacked, true TLS connection with the server. This
 	// hijacked connection will use whatever combination of cipher suite and version was negotiated
@@ -28,12 +28,12 @@ type DialerOpts struct {
 	TLSConfig *tls.Config
 }
 
-func (opts DialerOpts) withDefaults() DialerOpts {
-	newOpts := opts
-	if opts.TLSConfig == nil {
-		newOpts.TLSConfig = &tls.Config{}
+func (cfg DialerConfig) withDefaults() DialerConfig {
+	newCfg := cfg
+	if cfg.TLSConfig == nil {
+		newCfg.TLSConfig = &tls.Config{}
 	}
-	return newOpts
+	return newCfg
 }
 
 // Dialer is the interface implemented by network dialers.
@@ -44,7 +44,7 @@ type Dialer interface {
 
 type dialer struct {
 	Dialer
-	DialerOpts
+	DialerConfig
 }
 
 func (d dialer) Dial(network, address string) (net.Conn, error) {
@@ -60,7 +60,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 			defer cancel()
 		}
 	}
-	ptlsDialer := ptlshs.WrapDialer(d.Dialer, d.ProxiedHandshakeOpts)
+	ptlsDialer := ptlshs.WrapDialer(d.Dialer, d.ProxiedHandshakeConfig)
 	conn, err := ptlsDialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
@@ -72,7 +72,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	}
 	resultChan := make(chan hijackResult, 1)
 	go func() {
-		conn, err = hijack(conn.(ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeOpts.Secret)
+		conn, err = hijack(conn.(ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeConfig.Secret)
 		resultChan <- hijackResult{conn, err}
 	}()
 	select {
@@ -90,26 +90,26 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 
 // WrapDialer wraps the input dialer with a network dialer which will perform the tlsmasq protocol.
 // Dialing will result in TLS connections with peers.
-func WrapDialer(d Dialer, opts DialerOpts) Dialer {
-	return dialer{d, opts.withDefaults()}
+func WrapDialer(d Dialer, cfg DialerConfig) Dialer {
+	return dialer{d, cfg.withDefaults()}
 }
 
 // Dial a tlsmasq listener. This will result in a TLS connection with the peer.
-func Dial(network, address string, opts DialerOpts) (net.Conn, error) {
-	return WrapDialer(&net.Dialer{}, opts).Dial(network, address)
+func Dial(network, address string, cfg DialerConfig) (net.Conn, error) {
+	return WrapDialer(&net.Dialer{}, cfg).Dial(network, address)
 }
 
 // DialTimeout acts like Dial but takes a timeout.
-func DialTimeout(network, address string, opts DialerOpts, timeout time.Duration) (net.Conn, error) {
+func DialTimeout(network, address string, cfg DialerConfig, timeout time.Duration) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return WrapDialer(&net.Dialer{}, opts).DialContext(ctx, network, address)
+	return WrapDialer(&net.Dialer{}, cfg).DialContext(ctx, network, address)
 }
 
-// ListenerOpts specifies options for listening.
-type ListenerOpts struct {
-	// ProxiedHandshakeOpts specifies options for the proxied handshake.
-	ProxiedHandshakeOpts ptlshs.ListenerOpts
+// ListenerConfig specifies configuration for listening.
+type ListenerConfig struct {
+	// ProxiedHandshakeConfig specifies configuration for the proxied handshake.
+	ProxiedHandshakeConfig ptlshs.ListenerConfig
 
 	// TLSConfig specifies configuration for hijacked, true TLS connections with the clients. These
 	// hijacked connections will use whatever combination of cipher suite and version was negotiated
@@ -118,17 +118,17 @@ type ListenerOpts struct {
 	TLSConfig *tls.Config
 }
 
-func (opts ListenerOpts) withDefaults() ListenerOpts {
-	newOpts := opts
-	if opts.TLSConfig == nil {
-		newOpts.TLSConfig = &tls.Config{}
+func (cfg ListenerConfig) withDefaults() ListenerConfig {
+	newCfg := cfg
+	if cfg.TLSConfig == nil {
+		newCfg.TLSConfig = &tls.Config{}
 	}
-	return newOpts
+	return newCfg
 }
 
 type listener struct {
 	net.Listener // a listener created by the ptlshs package
-	ListenerOpts
+	ListenerConfig
 }
 
 func (l listener) Accept() (net.Conn, error) {
@@ -137,7 +137,7 @@ func (l listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	// We know the type assertion will succeed because we know l.Listener comes from ptlshs.
-	conn, err = allowHijack(conn.(ptlshs.Conn), l.TLSConfig, l.ProxiedHandshakeOpts.Secret)
+	conn, err = allowHijack(conn.(ptlshs.Conn), l.TLSConfig, l.ProxiedHandshakeConfig.Secret)
 	if err != nil {
 		return nil, fmt.Errorf("failed while negotiating hijack: %w", err)
 	}
@@ -146,17 +146,17 @@ func (l listener) Accept() (net.Conn, error) {
 
 // WrapListener wraps the input listener with one which speaks the tlsmasq protocol. Accepted
 // connections will be TLS connections.
-func WrapListener(l net.Listener, opts ListenerOpts) net.Listener {
-	return listener{ptlshs.WrapListener(l, opts.ProxiedHandshakeOpts), opts.withDefaults()}
+func WrapListener(l net.Listener, cfg ListenerConfig) net.Listener {
+	return listener{ptlshs.WrapListener(l, cfg.ProxiedHandshakeConfig), cfg.withDefaults()}
 }
 
 // Listen for tlsmasq dialers. Accepted connections will be TLS connections.
-func Listen(network, address string, opts ListenerOpts) (net.Listener, error) {
+func Listen(network, address string, cfg ListenerConfig) (net.Listener, error) {
 	l, err := net.Listen(network, address)
 	if err != nil {
 		return nil, err
 	}
-	return listener{ptlshs.WrapListener(l, opts.ProxiedHandshakeOpts), opts}, nil
+	return listener{ptlshs.WrapListener(l, cfg.ProxiedHandshakeConfig), cfg}, nil
 }
 
 // Returns the earliest of:

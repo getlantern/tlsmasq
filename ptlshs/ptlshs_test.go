@@ -38,10 +38,10 @@ func TestListenAndDial(t *testing.T) {
 		require.NoError(t, conn.(*tls.Conn).Handshake())
 	}()
 
-	dialerOpts := DialerOpts{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: secret}
-	listenerOpts := ListenerOpts{DialProxied: dialProxied, Secret: secret}
+	dialerCfg := DialerConfig{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: secret}
+	listenerCfg := ListenerConfig{DialProxied: dialProxied, Secret: secret}
 
-	l, err := Listen("tcp", "localhost:0", listenerOpts)
+	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
 	defer l.Close()
 
@@ -62,7 +62,7 @@ func TestListenAndDial(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	conn, err := DialTimeout("tcp", l.Addr().String(), dialerOpts, timeout)
+	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
 	require.NoError(t, err)
 	conn.SetDeadline(time.Now().Add(timeout))
 	defer conn.Close()
@@ -154,8 +154,8 @@ func TestSignalReplay(t *testing.T) {
 	_l, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 
-	listenerOpts := ListenerOpts{DialProxied: dialProxied, Secret: secret}
-	l := WrapListener(mitmListener{_l, onServerRead, onServerWrite}, listenerOpts)
+	listenerCfg := ListenerConfig{DialProxied: dialProxied, Secret: secret}
+	l := WrapListener(mitmListener{_l, onServerRead, onServerWrite}, listenerCfg)
 	defer l.Close()
 
 	go func() {
@@ -173,8 +173,8 @@ func TestSignalReplay(t *testing.T) {
 	}()
 
 	// Dial once so that our callbacks pick up the signal.
-	dialerOpts := DialerOpts{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: secret}
-	conn, err := DialTimeout("tcp", l.Addr().String(), dialerOpts, timeout)
+	dialerCfg := DialerConfig{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: secret}
+	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
 	require.NoError(t, err)
 	require.NoError(t, conn.(Conn).Handshake())
 	conn.Close()
@@ -253,8 +253,8 @@ func progressionToProxyHelper(t *testing.T, clientCloses bool) {
 		require.NoError(t, err)
 	}()
 
-	listenerOpts := ListenerOpts{DialProxied: dialProxied, Secret: secret}
-	l, err := Listen("tcp", "localhost:0", listenerOpts)
+	listenerCfg := ListenerConfig{DialProxied: dialProxied, Secret: secret}
+	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
 	defer l.Close()
 

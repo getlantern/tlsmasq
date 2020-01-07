@@ -42,22 +42,22 @@ func TestListenAndDial(t *testing.T) {
 	}()
 
 	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
-	dialerOpts := DialerOpts{
-		ProxiedHandshakeOpts: ptlshs.DialerOpts{
+	dialerCfg := DialerConfig{
+		ProxiedHandshakeConfig: ptlshs.DialerConfig{
 			TLSConfig: insecureTLSConfig,
 			Secret:    secret,
 		},
 		TLSConfig: insecureTLSConfig,
 	}
-	listenerOpts := ListenerOpts{
-		ProxiedHandshakeOpts: ptlshs.ListenerOpts{
+	listenerCfg := ListenerConfig{
+		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
 			DialProxied: dialProxied,
 			Secret:      secret,
 		},
 		TLSConfig: insecureTLSConfig,
 	}
 
-	l, err := Listen("tcp", "localhost:0", listenerOpts)
+	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
 	defer l.Close()
 
@@ -78,7 +78,7 @@ func TestListenAndDial(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	conn, err := DialTimeout("tcp", l.Addr().String(), dialerOpts, timeout)
+	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
 	require.NoError(t, err)
 	conn.SetDeadline(time.Now().Add(timeout))
 	defer conn.Close()
@@ -127,35 +127,35 @@ func TestDialTimeout(t *testing.T) {
 			}
 		}
 	}
-	dialerOpts := DialerOpts{
-		ProxiedHandshakeOpts: ptlshs.DialerOpts{TLSConfig: &tls.Config{InsecureSkipVerify: true}},
+	dialerCfg := DialerConfig{
+		ProxiedHandshakeConfig: ptlshs.DialerConfig{TLSConfig: &tls.Config{InsecureSkipVerify: true}},
 	}
 
 	t.Run("via argument", testFunc(func(network, address string, timeout time.Duration) (net.Conn, error) {
-		return DialTimeout(network, address, dialerOpts, timeout)
+		return DialTimeout(network, address, dialerCfg, timeout)
 	}))
 	t.Run("via dialer", testFunc(func(network, address string, timeout time.Duration) (net.Conn, error) {
-		return WrapDialer(&net.Dialer{Timeout: timeout}, dialerOpts).Dial(network, address)
+		return WrapDialer(&net.Dialer{Timeout: timeout}, dialerCfg).Dial(network, address)
 	}))
 	t.Run("earlier dialer", testFunc(func(network, address string, timeout time.Duration) (net.Conn, error) {
 		// The earlier timeout on the dialer should be respected.
 		ctx, cancel := context.WithTimeout(context.Background(), timeout*10)
 		defer cancel()
-		return WrapDialer(&net.Dialer{Timeout: timeout}, dialerOpts).DialContext(ctx, network, address)
+		return WrapDialer(&net.Dialer{Timeout: timeout}, dialerCfg).DialContext(ctx, network, address)
 	}))
 	t.Run("earlier context", testFunc(func(network, address string, timeout time.Duration) (net.Conn, error) {
 		// The earlier timeout on the context should be respected.
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		return WrapDialer(&net.Dialer{Timeout: timeout * 10}, dialerOpts).DialContext(ctx, network, address)
+		return WrapDialer(&net.Dialer{Timeout: timeout * 10}, dialerCfg).DialContext(ctx, network, address)
 	}))
 }
 
 func TestDialContext(t *testing.T) {
 	t.Parallel()
 
-	dialerOpts := DialerOpts{
-		ProxiedHandshakeOpts: ptlshs.DialerOpts{
+	dialerCfg := DialerConfig{
+		ProxiedHandshakeConfig: ptlshs.DialerConfig{
 			TLSConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
@@ -169,7 +169,7 @@ func TestDialContext(t *testing.T) {
 	errc := make(chan error)
 	go func() {
 		close(started)
-		_, err := WrapDialer(&net.Dialer{}, dialerOpts).DialContext(ctx, "tcp", l.Addr().String())
+		_, err := WrapDialer(&net.Dialer{}, dialerCfg).DialContext(ctx, "tcp", l.Addr().String())
 		errc <- err
 	}()
 

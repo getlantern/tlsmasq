@@ -32,8 +32,8 @@ func Example() {
 
 	// Start a TCP server which begins with our proxied TLS handshake.
 	dialProxied := func() (net.Conn, error) { return net.Dial("tcp", tlsServerAddr) }
-	listenerOpts := ListenerOpts{DialProxied: dialProxied, Secret: *secret}
-	l, err := Listen("tcp", "localhost:0", listenerOpts)
+	listenerCfg := ListenerConfig{DialProxied: dialProxied, Secret: *secret}
+	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	defer l.Close()
 
 	go func() {
@@ -64,8 +64,8 @@ func Example() {
 	}()
 
 	// Dial with a ptlshs client.
-	dialerOpts := DialerOpts{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: *secret}
-	conn, err := Dial("tcp", l.Addr().String(), dialerOpts)
+	dialerCfg := DialerConfig{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: *secret}
+	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
 	if err != nil {
 		panic(err)
 	}
