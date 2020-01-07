@@ -137,9 +137,6 @@ type listener struct {
 }
 
 func (l listener) Accept() (net.Conn, error) {
-	// TODO: if the Accept function blocks when proxying a connection (from say, an active probe),
-	// then the typical pattern of accept loops will not work. Think about how to resolve this.
-
 	clientConn, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
