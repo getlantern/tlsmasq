@@ -108,8 +108,8 @@ func TestSignalReplay(t *testing.T) {
 	}()
 
 	// We capture the encrypted signal by watching the bytes going in and out of the server. We use
-	// some knowledge of the "protocol" and secret to identify the signal, but this could
-	// conceivably be done without this information as well.
+	// some knowledge of the protocol and secret to identify the signal, but this could conceivably
+	// be done without this information.
 	var (
 		encryptedSignalChan = make(chan []byte, 1)
 		serverHello         *reptls.ServerHello
@@ -162,13 +162,15 @@ func TestSignalReplay(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			conn, err := l.Accept()
 			require.NoError(t, err)
-			_, err = conn.(Conn).Write([]byte(serverMsg))
-			if i == 0 {
-				require.NoError(t, err)
-			} else {
-				// The second one is supposed to fail.
-				require.Error(t, err)
-			}
+			go func(c net.Conn, connNumber int) {
+				_, err = c.Write([]byte(serverMsg))
+				if connNumber == 0 {
+					require.NoError(t, err)
+				} else {
+					// The second one is supposed to fail.
+					require.Error(t, err)
+				}
+			}(conn, i)
 		}
 	}()
 
@@ -177,7 +179,7 @@ func TestSignalReplay(t *testing.T) {
 	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
 	require.NoError(t, err)
 	require.NoError(t, conn.(Conn).Handshake())
-	conn.Close()
+	defer conn.Close()
 
 	var encryptedSignal []byte
 	select {
