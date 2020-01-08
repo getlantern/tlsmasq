@@ -480,8 +480,6 @@ func (c mitmConn) Read(b []byte) (n int, err error) {
 		c.onRead(b[:n])
 	}
 	if err == io.EOF {
-		// This is an unexported error indicating that the connection is closed.
-		// See https://golang.org/pkg/internal/poll/#pkg-variables
 		close(c.closedByPeer)
 	}
 	return
