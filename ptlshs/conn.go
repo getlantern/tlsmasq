@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/getlantern/preconn"
+	"github.com/getlantern/tlsmasq/internal/preconn"
 	"github.com/getlantern/tlsmasq/internal/reptls"
 	"golang.org/x/sync/errgroup"
 )
