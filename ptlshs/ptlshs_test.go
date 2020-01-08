@@ -113,8 +113,11 @@ func TestSignalReplay(t *testing.T) {
 	var (
 		encryptedSignalChan = make(chan []byte, 1)
 		serverHello         *reptls.ServerHello
+		serverHelloMu       sync.Mutex // only necessary to appease the race detector
 	)
 	onServerWrite := func(b []byte) {
+		serverHelloMu.Lock()
+		defer serverHelloMu.Unlock()
 		if serverHello != nil {
 			return
 		}
@@ -123,6 +126,8 @@ func TestSignalReplay(t *testing.T) {
 		require.NoError(t, err)
 	}
 	onServerRead := func(b []byte) {
+		serverHelloMu.Lock()
+		defer serverHelloMu.Unlock()
 		if serverHello == nil {
 			return
 		}
