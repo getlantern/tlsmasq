@@ -307,6 +307,10 @@ func (c *serverConn) handshake() error {
 		version, suite uint16
 		seq            [8]byte
 	)
+	// TODO: address possible (though highly improbable race condition):
+	//   It is possible that we do not close serverHelloParsed until after the client has sent the
+	//   completion signal. In this case, the client-read callback would never see the completion
+	//   signal and this handshake function would never return.
 	onReadFromProxied := func(b []byte) {
 		if !firstReadFromProxied {
 			return
@@ -314,18 +318,18 @@ func (c *serverConn) handshake() error {
 		firstReadFromProxied = false
 		serverHello, err := reptls.ParseServerHello(b)
 		if err != nil {
-			tryToSend(errOnReadFromProxied, fmt.Errorf("failed to parse server hello: %w", err))
+			errOnReadFromProxied <- fmt.Errorf("failed to parse server hello: %w", err)
 			return
 		}
 		version, suite = serverHello.Version, serverHello.Suite
 		seq, iv, err = deriveSeqAndIV(serverHello.Random)
 		if err != nil {
-			tryToSend(errOnReadFromProxied, fmt.Errorf("failed to derive sequence and IV: %w", err))
+			errOnReadFromProxied <- fmt.Errorf("failed to derive sequence and IV: %w", err)
 			return
 		}
 		cs, err := reptls.NewConnState(serverHello.Version, serverHello.Suite, seq)
 		if err != nil {
-			tryToSend(errOnReadFromProxied, fmt.Errorf("failed to init conn state based on hello info: %w", err))
+			errOnReadFromProxied <- fmt.Errorf("failed to init conn state based on hello info: %w", err)
 			return
 		}
 		tlsState = cs
