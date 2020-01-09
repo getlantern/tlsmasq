@@ -6,10 +6,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -83,9 +81,7 @@ type clientConn struct {
 	// The underlying connection to the server. This is likely just a TCP connection.
 	net.Conn
 
-	tlsCfg    *tls.Config
-	preshared Secret
-	nonceTTL  time.Duration
+	cfg DialerConfig
 
 	// One of the following is initialized after Handshake().
 	state        *connState
@@ -95,10 +91,10 @@ type clientConn struct {
 	handshakeComplete chan struct{}
 }
 
-// Client initializes a client-side connection. The nonceTTL specifies the time-to-live for nonces
-// used in completion signals.
-func Client(toServer net.Conn, tlsCfg *tls.Config, preshared Secret, nonceTTL time.Duration) Conn {
-	return &clientConn{toServer, tlsCfg, preshared, nonceTTL, nil, nil, sync.Once{}, make(chan struct{})}
+// Client initializes a client-side connection.
+func Client(toServer net.Conn, cfg DialerConfig) Conn {
+	cfg = cfg.withDefaults()
+	return &clientConn{toServer, cfg, nil, nil, sync.Once{}, make(chan struct{})}
 }
 
 func (c *clientConn) Underlying() net.Conn {
@@ -149,7 +145,7 @@ func (c *clientConn) handshake() error {
 	}
 
 	mitmConn := mitm(c.Conn, onClientRead, nil)
-	tlsConn := tls.Client(mitmConn, c.tlsCfg)
+	tlsConn := tls.Client(mitmConn, c.cfg.TLSConfig)
 	if err := tlsConn.Handshake(); err != nil {
 		return err
 	}
@@ -164,11 +160,11 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to read TLS connection state: %w", err)
 	}
-	signal, err := newCompletionSignal(c.nonceTTL)
+	signal, err := newCompletionSignal(c.cfg.NonceTTL)
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
-	_, err = reptls.WriteRecord(c.Conn, signal[:], tlsState, c.preshared, iv)
+	_, err = reptls.WriteRecord(c.Conn, signal[:], tlsState, c.cfg.Secret, iv)
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}
@@ -215,10 +211,10 @@ type serverConn struct {
 	// The underlying connection to the client. This is likely just a TCP connection.
 	net.Conn
 
-	toProxied      net.Conn
-	preshared      Secret
-	isValidNonce   func(Nonce) bool
-	nonFatalErrors chan<- error
+	cfg ListenerConfig
+
+	nonceCache *nonceCache
+	closeCache bool
 
 	// One of the following is initialized after Handshake().
 	state        *connState
@@ -228,16 +224,16 @@ type serverConn struct {
 	handshakeComplete chan struct{}
 }
 
-// Server initializes a server-side connection. The isValid function is used to determine nonce
-// validity for completion signals sent by the client. The channel nonFatal is used to communicate
-// non-fatal errors. These may be due to probes.
-//
-// The connection toProxied will be closed when the handshake completes. Both connections will be
-// closed if either peer closes the connection on their end. This is done to avoid leaks.
-func Server(toClient, toProxied net.Conn, preshared Secret, isValid func(Nonce) bool, nonFatal chan<- error) Conn {
-	return &serverConn{
-		toClient, toProxied, preshared, isValid, nonFatal, nil, nil, sync.Once{}, make(chan struct{}),
-	}
+// Server initializes a server-side connection.
+func Server(toClient net.Conn, cfg ListenerConfig) Conn {
+	cfg = cfg.withDefaults()
+	nc := newNonceCache(cfg.NonceSweepInterval)
+	return serverConnWithCache(toClient, cfg, nc, true)
+}
+
+// Ignores cfg.NonceSweepInterval.
+func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
+	return &serverConn{toClient, cfg, cache, closeCache, nil, nil, sync.Once{}, make(chan struct{})}
 }
 
 func (c *serverConn) Underlying() net.Conn {
@@ -258,6 +254,13 @@ func (c *serverConn) Write(b []byte) (n int, err error) {
 	return c.Conn.Write(b)
 }
 
+func (c *serverConn) Close() error {
+	if c.closeCache {
+		c.nonceCache.close()
+	}
+	return c.Conn.Close()
+}
+
 // Handshake performs the ptlshs handshake protocol, if it has not yet been performed. Note that,
 // per the protocol, the connection will proxy all data until the completion signal. Thus, if this
 // connection comes from an active probe, this handshake function may not return until the probe
@@ -272,6 +275,12 @@ func (c *serverConn) Handshake() error {
 }
 
 func (c *serverConn) handshake() error {
+	toProxied, err := c.cfg.DialProxied()
+	if err != nil {
+		return fmt.Errorf("failed to dial proxied server: %w", err)
+	}
+	defer toProxied.Close()
+
 	buf := make([]byte, listenerReadBufferSize)
 
 	// Read and copy ClientHello.
@@ -279,13 +288,13 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to read from client: %w", err)
 	}
-	_, err = makeNetworkCall(c.toProxied.Write, buf[:n])
+	_, err = makeNetworkCall(toProxied.Write, buf[:n])
 	if err != nil {
 		return fmt.Errorf("failed to write to proxied: %w", err)
 	}
 
 	// Read, parse, and copy ServerHello.
-	n, err = makeNetworkCall(c.toProxied.Read, buf)
+	n, err = makeNetworkCall(toProxied.Read, buf)
 	if err != nil {
 		return fmt.Errorf("failed to read from proxied: %w", err)
 	}
@@ -303,12 +312,7 @@ func (c *serverConn) handshake() error {
 	}
 
 	// Wait until we've received the completion signal.
-	err = c.watchForCompletionSignal(listenerReadBufferSize, *tlsState)
-	if errors.Is(err, io.EOF) {
-		// One side closed the connection. Close both to avoid leaks.
-		c.Conn.Close()
-		c.toProxied.Close()
-	}
+	err = c.watchForCompletionSignal(listenerReadBufferSize, *tlsState, toProxied)
 	if err != nil {
 		return fmt.Errorf("failed while watching for completion signal: %w", err)
 	}
@@ -316,8 +320,9 @@ func (c *serverConn) handshake() error {
 }
 
 // Copies data between the client (c.Conn) and the proxied server (c.toProxied), watching client
-// messages for the completion signal.
-func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.ConnState) error {
+// messages for the completion signal. If the signal is received, the connection toProxied will be
+// closed.
+func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.ConnState, toProxied net.Conn) error {
 	type namedConn struct {
 		net.Conn
 		name string
@@ -328,7 +333,7 @@ func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.Co
 		group, ctx     = errgroup.WithContext(groupCtx)
 
 		client  = namedConn{c.Conn, "client"}
-		proxied = namedConn{c.toProxied, "proxied"}
+		proxied = namedConn{toProxied, "proxied"}
 	)
 
 	copyFn := func(dst, src namedConn, onRead func([]byte)) func() error {
@@ -361,8 +366,8 @@ func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.Co
 
 			// The other routine will be blocked reading from the proxied server. We unblock it by
 			// closing the connection to the proxied server, after flushing the unprocessed data.
-			c.toProxied.Write(preSignal)
-			c.toProxied.Close()
+			toProxied.Write(preSignal)
+			toProxied.Close()
 
 			// We also need to ensure the unprocessed post-signal data is not lost. We prepend it to
 			// the client connection. Access to c.Conn is single-threaded until the handshake is
@@ -390,7 +395,7 @@ func (c *serverConn) checkForSignal(b []byte, cs reptls.ConnState) (found bool, 
 	}
 
 	preSignalBuf := new(bytes.Buffer)
-	results := reptls.ReadRecords(bytes.NewReader(b), &cs, c.preshared, c.state.iv)
+	results := reptls.ReadRecords(bytes.NewReader(b), &cs, c.cfg.Secret, c.state.iv)
 	for i, result := range results {
 		if result.Err != nil {
 			// Only act if we successfully decrypted. Otherwise, assume this wasn't the signal.
@@ -399,12 +404,12 @@ func (c *serverConn) checkForSignal(b []byte, cs reptls.ConnState) (found bool, 
 		signal, err := parseCompletionSignal(result.Data)
 		if err != nil {
 			// Again, only act if this looks like the signal.
-			tryToSend(c.nonFatalErrors, fmt.Errorf("decrypted record, but failed to parse signal: %w", err))
+			tryToSend(c.cfg.NonFatalErrors, fmt.Errorf("decrypted record, but failed to parse signal: %w", err))
 			continue
 		}
-		if !c.isValidNonce(signal.getNonce()) {
+		if !c.nonceCache.isValid(signal.getNonce()) {
 			// Looks like a replay. Continue so that the connection will just get proxied.
-			tryToSend(c.nonFatalErrors, errors.New("received bad nonce; likely a signal replay"))
+			tryToSend(c.cfg.NonFatalErrors, errors.New("received bad nonce; likely a signal replay"))
 			continue
 		}
 		postSignal = b[result.N:]

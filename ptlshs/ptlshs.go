@@ -7,7 +7,6 @@ package ptlshs
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"net"
 	"time"
 )
@@ -82,7 +81,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, err
 	}
-	return Client(conn, d.TLSConfig, d.Secret, d.NonceTTL), nil
+	return Client(conn, d.DialerConfig), nil
 }
 
 // WrapDialer wraps the input dialer with a network dialer which will perform the ptlshs protocol.
@@ -141,11 +140,7 @@ func (l listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	toProxied, err := l.DialProxied()
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial proxied server: %w", err)
-	}
-	return Server(clientConn, toProxied, l.Secret, l.nonceCache.isValid, l.NonFatalErrors), nil
+	return serverConnWithCache(clientConn, l.ListenerConfig, l.nonceCache, false), nil
 }
 
 func (l listener) Close() error {

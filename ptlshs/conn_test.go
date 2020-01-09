@@ -3,6 +3,7 @@ package ptlshs
 import (
 	"crypto/rand"
 	"crypto/tls"
+	"net"
 	"testing"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
@@ -24,10 +25,6 @@ func TestHandshake(t *testing.T) {
 			CipherSuites:       []uint16{suite},
 			Certificates:       []tls.Certificate{cert},
 		}
-
-		// Not testing nonce logic.
-		isValidNonce = func(n Nonce) bool { return true }
-
 		secret Secret
 	)
 	_, err := rand.Read(secret[:])
@@ -38,8 +35,10 @@ func TestHandshake(t *testing.T) {
 	go proxiedConn.Handshake()
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := Client(clientTransport, tlsCfg, secret, 0)
-	serverConn := Server(serverTransport, serverToProxied, secret, isValidNonce, make(chan error))
+	clientConn := Client(clientTransport, DialerConfig{tlsCfg, secret, 0})
+	serverConn := Server(serverTransport, ListenerConfig{
+		func() (net.Conn, error) { return serverToProxied, nil }, secret, 0, make(chan error)},
+	)
 
 	done := make(chan struct{})
 	go func() {

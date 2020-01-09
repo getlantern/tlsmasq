@@ -3,6 +3,7 @@ package tlsmasq
 import (
 	"crypto/rand"
 	"crypto/tls"
+	"net"
 	"testing"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
@@ -29,12 +30,8 @@ func TestHijack(t *testing.T) {
 			Certificates:       []tls.Certificate{cert},
 		}
 
-		secret ptlshs.Secret
-
-		// Not testing ptlshs.
-		isValidNonce = func(n ptlshs.Nonce) bool { return true }
-
 		clientMsg, serverMsg = "hello from the client", "hello from server"
+		secret               ptlshs.Secret
 	)
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
@@ -46,8 +43,14 @@ func TestHijack(t *testing.T) {
 	defer proxiedToServer.Close()
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := ptlshs.Client(clientTransport, tlsCfg, secret, 0)
-	serverConn := ptlshs.Server(serverTransport, serverToProxied, secret, isValidNonce, make(chan error))
+	clientConn := ptlshs.Client(clientTransport, ptlshs.DialerConfig{
+		TLSConfig: tlsCfg,
+		Secret:    secret,
+	})
+	serverConn := ptlshs.Server(serverTransport, ptlshs.ListenerConfig{
+		DialProxied: func() (net.Conn, error) { return serverToProxied, nil },
+		Secret:      secret,
+	})
 	defer clientConn.Close()
 	defer serverConn.Close()
 
