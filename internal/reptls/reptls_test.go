@@ -98,6 +98,8 @@ func TestReadAndWrite(t *testing.T) {
 }
 
 func TestReadRecords(t *testing.T) {
+	t.Parallel()
+
 	var (
 		secret [52]byte
 		iv     [16]byte

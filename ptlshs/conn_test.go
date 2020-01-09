@@ -11,6 +11,8 @@ import (
 )
 
 func TestHandshake(t *testing.T) {
+	t.Parallel()
+
 	// The choice of version and suite don't matter too much, but we will test with a suite
 	// which uses the sequence number as a nonce to ensure that path is tested.
 	const version, suite = tls.VersionTLS12, tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
