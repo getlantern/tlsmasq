@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/getlantern/tlsmasq/internal/preconn"
 	"github.com/getlantern/tlsmasq/internal/reptls"
-	"golang.org/x/sync/errgroup"
 )
 
 // Conn is a network connection between two peers speaking the ptlshs protocol. Methods returning
@@ -129,34 +129,29 @@ func (c *clientConn) Handshake() error {
 		c.handshakeErr = c.handshake()
 		close(c.handshakeComplete)
 	})
-	<-c.handshakeComplete
 	return c.handshakeErr
 }
 
 func (c *clientConn) handshake() error {
 	var (
-		serverRandom    []byte
-		serverRandomErr error
+		serverRandom []byte
 	)
-	onClientRead := func(b []byte) {
-		if serverRandom != nil || serverRandomErr != nil {
-			return
+	onClientRead := func(b []byte) error {
+		if serverRandom != nil {
+			return nil
 		}
 		serverHello, err := reptls.ParseServerHello(b)
 		if err != nil {
-			serverRandomErr = err
-			return
+			return fmt.Errorf("failed to parse server hello: %w", err)
 		}
 		serverRandom = serverHello.Random
+		return nil
 	}
 
 	mitmConn := mitm(c.Conn, onClientRead, nil)
 	tlsConn := tls.Client(mitmConn, c.tlsCfg)
 	if err := tlsConn.Handshake(); err != nil {
 		return err
-	}
-	if serverRandomErr != nil {
-		return fmt.Errorf("failed to parse server hello: %w", serverRandomErr)
 	}
 	if serverRandom == nil {
 		return fmt.Errorf("never saw server hello")
@@ -223,7 +218,7 @@ type serverConn struct {
 	toProxied      net.Conn
 	preshared      Secret
 	isValidNonce   func(Nonce) bool
-	nonFatalErrors chan<- error // TODO: evaluate whether this is still necessary
+	nonFatalErrors chan<- error
 
 	// One of the following is initialized after Handshake().
 	state        *connState
@@ -235,7 +230,10 @@ type serverConn struct {
 
 // Server initializes a server-side connection. The isValid function is used to determine nonce
 // validity for completion signals sent by the client. The channel nonFatal is used to communicate
-// non-fatal errors. These will likely be due to probes.
+// non-fatal errors. These may be due to probes.
+//
+// The connection toProxied will be closed when the handshake completes. Both connections will be
+// closed if either peer closes the connection on their end. This is done to avoid leaks.
 func Server(toClient, toProxied net.Conn, preshared Secret, isValid func(Nonce) bool, nonFatal chan<- error) Conn {
 	return &serverConn{
 		toClient, toProxied, preshared, isValid, nonFatal, nil, nil, sync.Once{}, make(chan struct{}),
@@ -270,17 +268,120 @@ func (c *serverConn) Handshake() error {
 		c.handshakeErr = c.handshake()
 		close(c.handshakeComplete)
 	})
-	<-c.handshakeComplete
 	return c.handshakeErr
 }
 
 func (c *serverConn) handshake() error {
-	// TODO: see if we can distinguish proxying and return a special error
+	buf := make([]byte, listenerReadBufferSize)
 
-	ctx, stop := context.WithCancel(context.Background())
-	errGroup, ctx := errgroup.WithContext(ctx)
-	defer stop()
+	// Read and copy ClientHello.
+	n, err := makeNetworkCall(c.Conn.Read, buf)
+	if err != nil {
+		return fmt.Errorf("failed to read from client: %w", err)
+	}
+	_, err = makeNetworkCall(c.toProxied.Write, buf[:n])
+	if err != nil {
+		return fmt.Errorf("failed to write to proxied: %w", err)
+	}
 
+	// Read, parse, and copy ServerHello.
+	n, err = makeNetworkCall(c.toProxied.Read, buf)
+	if err != nil {
+		return fmt.Errorf("failed to read from proxied: %w", err)
+	}
+	c.state, err = parseServerHello(buf[:n])
+	if err != nil {
+		return fmt.Errorf("failed to parse server hello: %w", err)
+	}
+	tlsState, err := reptls.NewConnState(c.state.version, c.state.suite, c.state.seq)
+	if err != nil {
+		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
+	}
+	_, err = makeNetworkCall(c.Conn.Write, buf[:n])
+	if err != nil {
+		return fmt.Errorf("failed to write to client: %w", err)
+	}
+
+	// Wait until we've received the completion signal.
+	err = c.watchForCompletionSignal(listenerReadBufferSize, *tlsState)
+	if errors.Is(err, io.EOF) {
+		// One side closed the connection. Close both to avoid leaks.
+		c.Conn.Close()
+		c.toProxied.Close()
+	}
+	if err != nil {
+		return fmt.Errorf("failed while watching for completion signal: %w", err)
+	}
+	return nil
+}
+
+// Copies data between the client (c.Conn) and the proxied server (c.toProxied), watching client
+// messages for the completion signal.
+func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.ConnState) error {
+	type namedConn struct {
+		net.Conn
+		name string
+	}
+
+	var (
+		groupCtx, stop = context.WithCancel(context.Background())
+		group, ctx     = errgroup.WithContext(groupCtx)
+
+		client  = namedConn{c.Conn, "client"}
+		proxied = namedConn{c.toProxied, "proxied"}
+	)
+
+	copyFn := func(dst, src namedConn, onRead func([]byte)) func() error {
+		return func() error {
+			buf := make([]byte, bufferSize)
+			for {
+				n, err := makeNetworkCall(src.Read, buf)
+				onRead(buf[:n])
+				if isDone(ctx) {
+					return nil
+				}
+				if err != nil {
+					return fmt.Errorf("failed to read from %s: %w", src.name, err)
+				}
+				_, err = makeNetworkCall(dst.Write, buf[:n])
+				if isDone(ctx) {
+					return nil
+				}
+				if err != nil {
+					return fmt.Errorf("failed to write to %s: %w", dst.name, err)
+				}
+			}
+		}
+	}
+	onClientRead := func(b []byte) {
+		ok, preSignal, postSignal := c.checkForSignal(b, tlsState)
+		if ok {
+			// Cancel the context to indicate to both routines that work is done.
+			stop()
+
+			// The other routine will be blocked reading from the proxied server. We unblock it by
+			// closing the connection to the proxied server, after flushing the unprocessed data.
+			c.toProxied.Write(preSignal)
+			c.toProxied.Close()
+
+			// We also need to ensure the unprocessed post-signal data is not lost. We prepend it to
+			// the client connection. Access to c.Conn is single-threaded until the handshake is
+			// complete, so this is safe to do without synchronization.
+			c.Conn = preconn.Wrap(c.Conn, postSignal)
+		}
+	}
+
+	// Note that the following two routines will continue to proxy data between the client and the
+	// proxied server until (1) the completion signal is received or (2) a non-temporary error
+	// occurs. Case 2 covers scenarios in which one peer closes the connection on their end.
+	group.Go(copyFn(client, proxied, func(_ []byte) {}))
+	group.Go(copyFn(proxied, client, onClientRead))
+	return group.Wait()
+}
+
+// preSignal and postSignal hold data from b from before and after the signal. These will be non-nil
+// iff the signal was found.
+func (c *serverConn) checkForSignal(b []byte, cs reptls.ConnState) (found bool, preSignal, postSignal []byte) {
 	tryToSend := func(errChan chan<- error, err error) {
 		select {
 		case errChan <- err:
@@ -288,141 +389,31 @@ func (c *serverConn) handshake() error {
 		}
 	}
 
-	var (
-		tlsState             *reptls.ConnState
-		iv                   [16]byte
-		serverHelloParsed    = make(chan struct{})
-		errOnReadFromProxied = make(chan error, 1)
-		firstReadFromProxied = true
-
-		// Data read off the connection after the completion signal. We assume this is data intended
-		// for the real server.
-		postSignalData = new(bytes.Buffer)
-
-		// Data read off the connection before the completion signal and which has not yet been
-		// written to the proxied server. Only used once we have receieved the signal.
-		preSignalData = new(bytes.Buffer)
-
-		// Saved to be passed back in the returned connection.
-		version, suite uint16
-		seq            [8]byte
-	)
-	// TODO: address possible (though highly improbable race condition):
-	//   It is possible that we do not close serverHelloParsed until after the client has sent the
-	//   completion signal. In this case, the client-read callback would never see the completion
-	//   signal and this handshake function would never return.
-	onReadFromProxied := func(b []byte) {
-		if !firstReadFromProxied {
-			return
+	preSignalBuf := new(bytes.Buffer)
+	results := reptls.ReadRecords(bytes.NewReader(b), &cs, c.preshared, c.state.iv)
+	for i, result := range results {
+		if result.Err != nil {
+			// Only act if we successfully decrypted. Otherwise, assume this wasn't the signal.
+			continue
 		}
-		firstReadFromProxied = false
-		serverHello, err := reptls.ParseServerHello(b)
+		signal, err := parseCompletionSignal(result.Data)
 		if err != nil {
-			errOnReadFromProxied <- fmt.Errorf("failed to parse server hello: %w", err)
-			return
+			// Again, only act if this looks like the signal.
+			tryToSend(c.nonFatalErrors, fmt.Errorf("decrypted record, but failed to parse signal: %w", err))
+			continue
 		}
-		version, suite = serverHello.Version, serverHello.Suite
-		seq, iv, err = deriveSeqAndIV(serverHello.Random)
-		if err != nil {
-			errOnReadFromProxied <- fmt.Errorf("failed to derive sequence and IV: %w", err)
-			return
+		if !c.isValidNonce(signal.getNonce()) {
+			// Looks like a replay. Continue so that the connection will just get proxied.
+			tryToSend(c.nonFatalErrors, errors.New("received bad nonce; likely a signal replay"))
+			continue
 		}
-		cs, err := reptls.NewConnState(serverHello.Version, serverHello.Suite, seq)
-		if err != nil {
-			errOnReadFromProxied <- fmt.Errorf("failed to init conn state based on hello info: %w", err)
-			return
+		postSignal = b[result.N:]
+		if i > 0 {
+			preSignalBuf.Write(b[:results[i-1].N])
 		}
-		tlsState = cs
-		close(serverHelloParsed)
+		return true, preSignalBuf.Bytes(), postSignal
 	}
-	onReadFromClient := func(b []byte) {
-		select {
-		case <-serverHelloParsed:
-			results := reptls.ReadRecords(bytes.NewReader(b), tlsState, c.preshared, iv)
-			for i, result := range results {
-				if result.Err != nil {
-					// Only act if we successfully decrypted. Otherwise, assume this wasn't the signal.
-					continue
-				}
-				signal, err := parseCompletionSignal(result.Data)
-				if err != nil {
-					// Again, only act if this looks like the signal.
-					tryToSend(c.nonFatalErrors, fmt.Errorf("decrypted record, but failed to parse signal: %w", err))
-					continue
-				}
-				if !c.isValidNonce(signal.getNonce()) {
-					// Looks like a replay. Continue so that the connection will just get proxied.
-					tryToSend(c.nonFatalErrors, errors.New("received bad nonce; likely a signal replay"))
-					continue
-				}
-				postSignalData.Write(b[result.N:])
-				if i > 0 {
-					preSignalData.Write(b[:results[i-1].N])
-				}
-				stop()
-			}
-		case <-ctx.Done():
-			// At this point, we just need to hold on to anything read from the client.
-			postSignalData.Write(b)
-			return
-		default:
-			return
-		}
-	}
-	errGroup.Go(func() error {
-		// TODO: think about allowing mitm callbacks to return errors
-		select {
-		case err := <-errOnReadFromProxied:
-			return err
-		case <-ctx.Done():
-			return nil
-		}
-	})
-	errGroup.Go(func() error {
-		<-ctx.Done()
-		// Write the remaining data, but don't worry about whether it makes it.
-		c.toProxied.Write(preSignalData.Bytes())
-		c.toProxied.Close()
-		return nil
-	})
-
-	mitmToProxied := mitm(c.toProxied, onReadFromProxied, nil)
-	mitmToClient := mitm(c.Conn, onReadFromClient, nil)
-	errGroup.Go(func() error {
-		return netCopy(
-			ctx,
-			namedConn{mitmToProxied, "proxied server"},
-			namedConn{mitmToClient, "client"},
-			listenerReadBufferSize,
-		)
-	})
-	errGroup.Go(func() error {
-		return netCopy(
-			ctx,
-			namedConn{mitmToClient, "client"},
-			namedConn{mitmToProxied, "proxied server"},
-			listenerReadBufferSize,
-		)
-	})
-	errGroup.Go(func() error {
-		<-ctx.Done()
-		select {
-		case <-mitmToClient.closedByPeer:
-			mitmToProxied.Close()
-		case <-mitmToProxied.closedByPeer:
-			mitmToClient.Close()
-		default:
-		}
-		return nil
-	})
-	if err := errGroup.Wait(); err != nil {
-		return err
-	}
-	// We're overwriting concurrently accessed fields here. However, these are not used until the
-	// handshake is complete, and the handshake is executed in a sync.Once.
-	c.Conn = preconn.Wrap(c.Conn, postSignalData.Bytes())
-	c.state = &connState{version, suite, seq, iv, sync.Mutex{}}
-	return nil
+	return false, nil, nil
 }
 
 func (c *serverConn) TLSVersion() uint16 {
@@ -459,28 +450,26 @@ func (c *serverConn) IV() [16]byte {
 
 type mitmConn struct {
 	net.Conn
-	onRead, onWrite func([]byte)
-	closedByPeer    chan struct{}
+	onRead, onWrite func([]byte) error
 }
 
 // Sets up a MITM'd connection. Callbacks will be invoked synchronously. Either callback may be nil.
-func mitm(conn net.Conn, onRead, onWrite func([]byte)) mitmConn {
+func mitm(conn net.Conn, onRead, onWrite func([]byte) error) mitmConn {
 	if onRead == nil {
-		onRead = func(_ []byte) {}
+		onRead = func(_ []byte) error { return nil }
 	}
 	if onWrite == nil {
-		onWrite = func(_ []byte) {}
+		onWrite = func(_ []byte) error { return nil }
 	}
-	return mitmConn{conn, onRead, onWrite, make(chan struct{})}
+	return mitmConn{conn, onRead, onWrite}
 }
 
 func (c mitmConn) Read(b []byte) (n int, err error) {
 	n, err = c.Conn.Read(b)
 	if n > 0 {
-		c.onRead(b[:n])
-	}
-	if err == io.EOF {
-		close(c.closedByPeer)
+		if err := c.onRead(b[:n]); err != nil {
+			return n, err
+		}
 	}
 	return
 }
@@ -488,55 +477,24 @@ func (c mitmConn) Read(b []byte) (n int, err error) {
 func (c mitmConn) Write(b []byte) (n int, err error) {
 	n, err = c.Conn.Write(b)
 	if n > 0 {
-		c.onWrite(b[:n])
-	}
-	if err != nil && strings.Contains(err.Error(), "use of closed network connection") {
-		// This is an unexported error indicating that the connection is closed.
-		// See https://golang.org/pkg/internal/poll/#pkg-variables
-		close(c.closedByPeer)
+		if err := c.onWrite(b[:n]); err != nil {
+			return n, err
+		}
 	}
 	return
 }
 
-type namedConn struct {
-	net.Conn
-	name string
-}
-
-// Copies from src to dst until the context is done.
-func netCopy(ctx context.Context, dst, src namedConn, bufferSize int) error {
-	if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
-		src.SetDeadline(deadline)
-		dst.SetDeadline(deadline)
-	}
-	buf := make([]byte, bufferSize)
+// Make a network call, ignoring temporary errors.
+func makeNetworkCall(networkFn func([]byte) (int, error), buf []byte) (int, error) {
 	for {
-		n, err := src.Read(buf)
-		if isDone(ctx) {
-			// TODO: without knowledge of the MITM stuff, it seems like we're just dropping data
-			return nil
+		n, err := networkFn(buf)
+		if err == nil {
+			return n, nil
 		}
-		if isNonTemporary(err) {
-			return fmt.Errorf("failed to read from %s: %w", src.name, err)
-		}
-		_, err = dst.Write(buf[:n])
-		if isDone(ctx) {
-			return nil
-		}
-		if isNonTemporary(err) {
-			return fmt.Errorf("failed to write to %s: %w", dst.name, err)
+		if netErr, ok := err.(net.Error); !ok || !netErr.Temporary() {
+			return n, err
 		}
 	}
-}
-
-func isNonTemporary(err error) bool {
-	if err == nil {
-		return false
-	}
-	if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
-		return false
-	}
-	return true
 }
 
 func isDone(ctx context.Context) bool {
@@ -546,6 +504,19 @@ func isDone(ctx context.Context) bool {
 	default:
 		return false
 	}
+}
+
+func parseServerHello(b []byte) (*connState, error) {
+	serverHello, err := reptls.ParseServerHello(b)
+	if err != nil {
+		return nil, err
+	}
+	version, suite := serverHello.Version, serverHello.Suite
+	seq, iv, err := deriveSeqAndIV(serverHello.Random)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive sequence and IV: %w", err)
+	}
+	return &connState{version, suite, seq, iv, sync.Mutex{}}, nil
 }
 
 func deriveSeqAndIV(serverRandom []byte) (seq [8]byte, iv [16]byte, err error) {

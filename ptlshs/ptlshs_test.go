@@ -115,21 +115,22 @@ func TestSignalReplay(t *testing.T) {
 		serverHello         *reptls.ServerHello
 		serverHelloMu       sync.Mutex // only necessary to appease the race detector
 	)
-	onServerWrite := func(b []byte) {
+	onServerWrite := func(b []byte) error {
 		serverHelloMu.Lock()
 		defer serverHelloMu.Unlock()
 		if serverHello != nil {
-			return
+			return nil
 		}
 		var err error
 		serverHello, err = reptls.ParseServerHello(b)
 		require.NoError(t, err)
+		return nil
 	}
-	onServerRead := func(b []byte) {
+	onServerRead := func(b []byte) error {
 		serverHelloMu.Lock()
 		defer serverHelloMu.Unlock()
 		if serverHello == nil {
-			return
+			return nil
 		}
 
 		seq, iv, err := deriveSeqAndIV(serverHello.Random)
@@ -154,6 +155,7 @@ func TestSignalReplay(t *testing.T) {
 			}
 			encryptedSignalChan <- b[lastN:result.N]
 		}
+		return nil
 	}
 
 	_l, err := net.Listen("tcp", "localhost:0")
@@ -298,7 +300,7 @@ func progressionToProxyHelper(t *testing.T, clientCloses bool) {
 
 type mitmListener struct {
 	net.Listener
-	onRead, onWrite func([]byte)
+	onRead, onWrite func([]byte) error
 }
 
 func (l mitmListener) Accept() (net.Conn, error) {
