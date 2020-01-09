@@ -23,9 +23,6 @@ import (
 type Conn interface {
 	net.Conn
 
-	// Underlying connection to the peer.
-	Underlying() net.Conn
-
 	// Handshake performs the ptlshs handshake protocol, if it has not yet been performed. Note
 	// that, per the protocol, the connection will proxy all data until the completion signal. Thus,
 	// if this connection comes from an active probe, this handshake function may not return until
@@ -95,10 +92,6 @@ type clientConn struct {
 func Client(toServer net.Conn, cfg DialerConfig) Conn {
 	cfg = cfg.withDefaults()
 	return &clientConn{toServer, cfg, nil, nil, sync.Once{}, make(chan struct{})}
-}
-
-func (c *clientConn) Underlying() net.Conn {
-	return c.Conn
 }
 
 func (c *clientConn) Read(b []byte) (n int, err error) {
@@ -234,10 +227,6 @@ func Server(toClient net.Conn, cfg ListenerConfig) Conn {
 // Ignores cfg.NonceSweepInterval.
 func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
 	return &serverConn{toClient, cfg, cache, closeCache, nil, nil, sync.Once{}, make(chan struct{})}
-}
-
-func (c *serverConn) Underlying() net.Conn {
-	return c.Conn
 }
 
 func (c *serverConn) Read(b []byte) (n int, err error) {
