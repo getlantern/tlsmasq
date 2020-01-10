@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/getlantern/tlsmasq/internal/preconn"
+	"github.com/getlantern/preconn"
 	"github.com/getlantern/tlsmasq/internal/reptls"
 )
 
