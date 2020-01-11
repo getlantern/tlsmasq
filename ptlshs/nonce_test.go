@@ -17,7 +17,7 @@ func TestNonceCache(t *testing.T) {
 
 	// For the first batch, use an expiration such that all will be evicted in the first sweep.
 	firstExpiration := time.Now().Add(sweepEvery / 2)
-	firstBatch := []Nonce{}
+	firstBatch := []nonce{}
 	for i := 0; i < perBatch; i++ {
 		n, err := newNonce(time.Until(firstExpiration))
 		require.NoError(t, err)
@@ -26,7 +26,7 @@ func TestNonceCache(t *testing.T) {
 
 	// We will have a second batch with a much later expiration.
 	secondExpiration := time.Now().Add(sweepEvery * 10)
-	secondBatch := []Nonce{}
+	secondBatch := []nonce{}
 	for i := 0; i < perBatch; i++ {
 		n, err := newNonce(time.Until(secondExpiration))
 		require.NoError(t, err)
@@ -36,11 +36,11 @@ func TestNonceCache(t *testing.T) {
 	nc := newNonceCache(sweepEvery)
 	defer nc.close()
 
-	for _, nonce := range add(firstBatch, secondBatch) {
+	for _, nonce := range concat(firstBatch, secondBatch) {
 		require.True(t, nc.isValid(nonce))
 	}
 	require.Equal(t, perBatch*2, nc.count())
-	for _, nonce := range add(firstBatch, secondBatch) {
+	for _, nonce := range concat(firstBatch, secondBatch) {
 		require.False(t, nc.isValid(nonce))
 	}
 	require.Equal(t, perBatch*2, nc.count())
@@ -52,7 +52,7 @@ func TestNonceCache(t *testing.T) {
 	require.True(t, time.Now().Before(secondExpiration))
 
 	require.Equal(t, perBatch, nc.count())
-	for _, nonce := range add(firstBatch, secondBatch) {
+	for _, nonce := range concat(firstBatch, secondBatch) {
 		require.False(t, nc.isValid(nonce))
 	}
 }
@@ -68,9 +68,8 @@ func (nc *nonceCache) count() int {
 	return count
 }
 
-// add, but don't append.
-func add(n ...[]Nonce) []Nonce {
-	result := []Nonce{}
+func concat(n ...[]nonce) []nonce {
+	result := []nonce{}
 	for _, a := range n {
 		result = append(result, a...)
 	}
