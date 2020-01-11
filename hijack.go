@@ -142,10 +142,8 @@ func (dc *disguisedConn) Read(b []byte) (n int, err error) {
 		return io.MultiReader(dc.processed, dc.unprocessed, dc.Conn).Read(b)
 	}
 
-	n, err = dc.processed.Read(b)
-	if err != nil && err != io.EOF {
-		return
-	}
+	// Note: the only error a bytes.Buffer can return is io.EOF, which we would ignore anyway.
+	n, _ = dc.processed.Read(b)
 	if n > 0 {
 		return
 	}

@@ -17,15 +17,15 @@ var ptlsSignalPrefix = []byte("handshake complete")
 type ptlsSignal [ptlsSignalLen]byte
 
 func newCompletionSignal(ttl time.Duration) (*ptlsSignal, error) {
-	n, err := newNonce(ttl)
+	nonce, err := newNonce(ttl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
 	s := ptlsSignal{}
-	copy(s[:], ptlsSignalPrefix)
-	copy(s[len(ptlsSignalPrefix):], n[:])
-	if _, err := rand.Read(s[len(ptlsSignalPrefix)+len(n):]); err != nil {
+	n := copy(s[:], ptlsSignalPrefix)
+	n += copy(s[n:], nonce[:])
+	if _, err := rand.Read(s[n:]); err != nil {
 		return nil, fmt.Errorf("failed to generate random padding: %w", err)
 	}
 	return &s, nil

@@ -72,8 +72,8 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	}
 	resultChan := make(chan hijackResult, 1)
 	go func() {
-		conn, err = hijack(conn.(ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeConfig.Secret)
-		resultChan <- hijackResult{conn, err}
+		hijacked, err := hijack(conn.(ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeConfig.Secret)
+		resultChan <- hijackResult{hijacked, err}
 	}()
 	select {
 	case result := <-resultChan:

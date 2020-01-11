@@ -514,7 +514,11 @@ func parseServerHello(b []byte) (*connState, error) {
 }
 
 func deriveSeqAndIV(serverRandom []byte) (seq [8]byte, iv [16]byte, err error) {
-	if len(serverRandom) < len(seq)+len(iv) {
+	// https://tools.ietf.org/html/rfc5246#section-6.1
+	// https://tools.ietf.org/html/rfc8446#section-4.1.3
+	const serverRandomSize = 32
+
+	if len(serverRandom) != serverRandomSize {
 		return seq, iv, fmt.Errorf(
 			"expected larger server random (should be 32 bytes, got %d)", len(serverRandom))
 	}

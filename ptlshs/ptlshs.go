@@ -69,14 +69,6 @@ func (d dialer) Dial(network, address string) (net.Conn, error) {
 }
 
 func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	// Respect any timeout or deadline on the wrapped dialer.
-	if netDialer, ok := d.Dialer.(*net.Dialer); ok {
-		if deadline := earliestDeadline(netDialer); !deadline.IsZero() {
-			var cancel func()
-			ctx, cancel = context.WithDeadline(ctx, deadline)
-			defer cancel()
-		}
-	}
 	conn, err := d.Dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
@@ -161,22 +153,4 @@ func Listen(network, address string, cfg ListenerConfig) (net.Listener, error) {
 		return nil, err
 	}
 	return WrapListener(l, cfg), nil
-}
-
-// Returns the earliest of:
-//   - time.Now()+Timeout
-//   - d.Deadline
-// Or zero, if neither Timeout nor Deadline are set.
-func earliestDeadline(d *net.Dialer) time.Time {
-	if d.Timeout == 0 && d.Deadline.IsZero() {
-		return time.Time{}
-	}
-	if d.Timeout == 0 {
-		return d.Deadline
-	}
-	timeoutExpiration := time.Now().Add(d.Timeout)
-	if d.Deadline.IsZero() || timeoutExpiration.Before(d.Deadline) {
-		return timeoutExpiration
-	}
-	return d.Deadline
 }
