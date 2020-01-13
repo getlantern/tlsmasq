@@ -23,33 +23,19 @@ import (
 // set fields like cfg.CipherSuites and cfg.MinVersion to ensure that the security parameters of the
 // hijacked connection are acceptable.
 func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
-	if err := conn.Handshake(); err != nil {
-		return nil, fmt.Errorf("proxied handshake failed: %w", err)
-	}
-	cfg, err := ensureParameters(cfg, conn)
-	if err != nil {
-		return nil, err
-	}
-	disguisedConn, err := disguise(conn, preshared)
-	if err != nil {
-		return nil, err
-	}
-	hijackedConn := tls.Client(disguisedConn, cfg)
-	if err := hijackedConn.Handshake(); err != nil {
-		return nil, fmt.Errorf("hijack handshake failed: %w", err)
-	}
-
-	// Now that the handshake is complete, we no longer need the disguise. The connection is
-	// successfully hijacked and further communication will be conducted with the appropriate
-	// version and suite, but newly-negotiated symmetric keys.
-	disguisedConn.inDisguise = false
-	return hijackedConn, nil
+	return doHijack(conn, cfg, preshared, tls.Client)
 }
 
 // allowHijack is the server-side counterpart to hijack. Waits for the second handshake on the
 // connection, expecting the handshake to be disguised. Expects that the disguise will be shed when
 // the handshake is complete.
 func allowHijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
+	return doHijack(conn, cfg, preshared, tls.Server)
+}
+
+func doHijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret,
+	tlsConn func(net.Conn, *tls.Config) *tls.Conn) (net.Conn, error) {
+
 	if err := conn.Handshake(); err != nil {
 		return nil, fmt.Errorf("proxied handshake failed: %w", err)
 	}
@@ -61,7 +47,7 @@ func allowHijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (ne
 	if err != nil {
 		return nil, err
 	}
-	hijackedConn := tls.Server(disguisedConn, cfg)
+	hijackedConn := tlsConn(disguisedConn, cfg)
 	if err := hijackedConn.Handshake(); err != nil {
 		return nil, fmt.Errorf("hijack handshake failed: %w", err)
 	}
