@@ -273,29 +273,26 @@ func (c *serverConn) handshake() error {
 	buf := make([]byte, listenerReadBufferSize)
 
 	// Read and copy ClientHello.
-	n, err := makeNetworkCall(c.Conn.Read, buf)
+	clientHello, err := readClientHello(c.Conn, buf)
 	if err != nil {
-		return fmt.Errorf("failed to read from client: %w", err)
+		return fmt.Errorf("failed to read ClientHello: %w", err)
 	}
-	_, err = makeNetworkCall(toProxied.Write, buf[:n])
+	_, err = makeNetworkCall(toProxied.Write, clientHello)
 	if err != nil {
 		return fmt.Errorf("failed to write to proxied: %w", err)
 	}
 
 	// Read, parse, and copy ServerHello.
-	n, err = makeNetworkCall(toProxied.Read, buf)
+	var serverHello []byte
+	serverHello, c.state, err = readServerHello(toProxied, buf)
 	if err != nil {
-		return fmt.Errorf("failed to read from proxied: %w", err)
-	}
-	c.state, err = parseServerHello(buf[:n])
-	if err != nil {
-		return fmt.Errorf("failed to parse server hello: %w", err)
+		return fmt.Errorf("failed to parse ServerHello: %w", err)
 	}
 	tlsState, err := reptls.NewConnState(c.state.version, c.state.suite, c.state.seq)
 	if err != nil {
 		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
 	}
-	_, err = makeNetworkCall(c.Conn.Write, buf[:n])
+	_, err = makeNetworkCall(c.Conn.Write, serverHello)
 	if err != nil {
 		return fmt.Errorf("failed to write to client: %w", err)
 	}
@@ -324,6 +321,9 @@ func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.Co
 		client  = namedConn{c.Conn, "client"}
 		proxied = namedConn{toProxied, "proxied"}
 	)
+
+	// Note: we assume here that the completion signal will arrive in a single read. As it is sent
+	// by clients we control and presently only 100 bytes, that should be a fairly safe assumption.
 
 	copyFn := func(dst, src namedConn, onRead func([]byte)) func() error {
 		return func() error {
@@ -442,6 +442,61 @@ func (c *serverConn) IV() [16]byte {
 	return c.state.iv
 }
 
+// Continuously reads off of conn until the bytes read constitute a valid TLS ClientHello. Does not
+// return until (1) a ClientHello has been received or (2) conn.Read returns a non-temporary error.
+func readClientHello(conn net.Conn, buf []byte) ([]byte, error) {
+	read := new(bytes.Buffer)
+	for {
+		n, err := makeNetworkCall(conn.Read, buf)
+		if err != nil {
+			return nil, err
+		}
+		// Note: bytes.Buffer.Write does not return errors.
+		read.Write(buf[:n])
+		if err := reptls.ValidateClientHello(read.Bytes()); err == nil {
+			return read.Bytes(), nil
+		}
+	}
+}
+
+// Continuously reads off of conn until the bytes read constitute a valid TLS ServerHello. Does not
+// return until (1) a ServerHello has been receieved or (2) conn.Read returns a non-temporary error.
+// Once the ServerHello is receieved, it is parsed and used to create a connection state.
+func readServerHello(conn net.Conn, buf []byte) ([]byte, *connState, error) {
+	read := new(bytes.Buffer)
+	for {
+		n, err := makeNetworkCall(conn.Read, buf)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Note: bytes.Buffer.Write does not return errors.
+		read.Write(buf[:n])
+		serverHello, err := reptls.ParseServerHello(read.Bytes())
+		if err == nil {
+			version, suite := serverHello.Version, serverHello.Suite
+			seq, iv, err := deriveSeqAndIV(serverHello.Random)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to derive sequence and IV: %w", err)
+			}
+			return read.Bytes(), &connState{version, suite, seq, iv, sync.Mutex{}}, nil
+		}
+	}
+}
+
+func deriveSeqAndIV(serverRandom []byte) (seq [8]byte, iv [16]byte, err error) {
+	// https://tools.ietf.org/html/rfc5246#section-6.1
+	// https://tools.ietf.org/html/rfc8446#section-4.1.3
+	const serverRandomSize = 32
+
+	if len(serverRandom) != serverRandomSize {
+		return seq, iv, fmt.Errorf(
+			"expected larger server random (should be 32 bytes, got %d)", len(serverRandom))
+	}
+	copy(seq[:], serverRandom)
+	copy(iv[:], serverRandom[len(seq):])
+	return seq, iv, nil
+}
+
 type mitmConn struct {
 	net.Conn
 
@@ -502,31 +557,4 @@ func isDone(ctx context.Context) bool {
 	default:
 		return false
 	}
-}
-
-func parseServerHello(b []byte) (*connState, error) {
-	serverHello, err := reptls.ParseServerHello(b)
-	if err != nil {
-		return nil, err
-	}
-	version, suite := serverHello.Version, serverHello.Suite
-	seq, iv, err := deriveSeqAndIV(serverHello.Random)
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive sequence and IV: %w", err)
-	}
-	return &connState{version, suite, seq, iv, sync.Mutex{}}, nil
-}
-
-func deriveSeqAndIV(serverRandom []byte) (seq [8]byte, iv [16]byte, err error) {
-	// https://tools.ietf.org/html/rfc5246#section-6.1
-	// https://tools.ietf.org/html/rfc8446#section-4.1.3
-	const serverRandomSize = 32
-
-	if len(serverRandom) != serverRandomSize {
-		return seq, iv, fmt.Errorf(
-			"expected larger server random (should be 32 bytes, got %d)", len(serverRandom))
-	}
-	copy(seq[:], serverRandom)
-	copy(iv[:], serverRandom[len(seq):])
-	return seq, iv, nil
 }
