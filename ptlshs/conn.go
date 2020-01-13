@@ -23,7 +23,7 @@ import (
 type Conn interface {
 	net.Conn
 
-	// Handshake performs the ptlshs handshake protocol, if it has not yet been performed. Note
+	// Handshake executes the ptlshs handshake protocol, if it has not yet been performed. Note
 	// that, per the protocol, the connection will proxy all data until the completion signal. Thus,
 	// if this connection comes from an active probe, this handshake function may not return until
 	// the probe closes the connection on its end. As a result, this function should be treated as

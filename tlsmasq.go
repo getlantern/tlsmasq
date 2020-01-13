@@ -9,7 +9,6 @@ package tlsmasq
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"net"
 	"time"
 
@@ -52,40 +51,12 @@ func (d dialer) Dial(network, address string) (net.Conn, error) {
 }
 
 func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	// Respect any timeout or deadline on the wrapped dialer.
-	if netDialer, ok := d.Dialer.(*net.Dialer); ok {
-		if deadline := earliestDeadline(netDialer); !deadline.IsZero() {
-			var cancel func()
-			ctx, cancel = context.WithDeadline(ctx, deadline)
-			defer cancel()
-		}
-	}
 	ptlsDialer := ptlshs.WrapDialer(d.Dialer, d.ProxiedHandshakeConfig)
 	conn, err := ptlsDialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
-
-	type hijackResult struct {
-		conn net.Conn
-		err  error
-	}
-	resultChan := make(chan hijackResult, 1)
-	go func() {
-		hijacked, err := hijack(conn.(ptlshs.Conn), d.TLSConfig, d.ProxiedHandshakeConfig.Secret)
-		resultChan <- hijackResult{hijacked, err}
-	}()
-	select {
-	case result := <-resultChan:
-		if result.err != nil {
-			return nil, fmt.Errorf("failed to hijack connection: %w", err)
-		}
-		return result.conn, nil
-	case <-ctx.Done():
-		conn.Close()
-		// Note: context.DeadlineExceeded implements net.Error, as we'd like.
-		return nil, ctx.Err()
-	}
+	return newConn(conn.(ptlshs.Conn), d.TLSConfig, tls.Client, d.ProxiedHandshakeConfig.Secret), nil
 }
 
 // WrapDialer wraps the input dialer with a network dialer which will perform the tlsmasq protocol.
@@ -137,11 +108,7 @@ func (l listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	// We know the type assertion will succeed because we know l.Listener comes from ptlshs.
-	conn, err = allowHijack(conn.(ptlshs.Conn), l.TLSConfig, l.ProxiedHandshakeConfig.Secret)
-	if err != nil {
-		return nil, fmt.Errorf("failed while negotiating hijack: %w", err)
-	}
-	return conn, nil
+	return newConn(conn.(ptlshs.Conn), l.TLSConfig, tls.Server, l.ProxiedHandshakeConfig.Secret), nil
 }
 
 // WrapListener wraps the input listener with one which speaks the tlsmasq protocol. Accepted
@@ -157,22 +124,4 @@ func Listen(network, address string, cfg ListenerConfig) (net.Listener, error) {
 		return nil, err
 	}
 	return listener{ptlshs.WrapListener(l, cfg.ProxiedHandshakeConfig), cfg}, nil
-}
-
-// Returns the earliest of:
-//   - time.Now()+Timeout
-//   - d.Deadline
-// Or zero, if neither Timeout nor Deadline are set.
-func earliestDeadline(d *net.Dialer) time.Time {
-	if d.Timeout == 0 && d.Deadline.IsZero() {
-		return time.Time{}
-	}
-	if d.Timeout == 0 {
-		return d.Deadline
-	}
-	timeoutExpiration := time.Now().Add(d.Timeout)
-	if d.Deadline.IsZero() || timeoutExpiration.Before(d.Deadline) {
-		return timeoutExpiration
-	}
-	return d.Deadline
 }

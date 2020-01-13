@@ -22,18 +22,7 @@ import (
 // to use a tls.Config which does not support this version and/or suite. However, it is important to
 // set fields like cfg.CipherSuites and cfg.MinVersion to ensure that the security parameters of the
 // hijacked connection are acceptable.
-func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
-	return doHijack(conn, cfg, preshared, tls.Client)
-}
-
-// allowHijack is the server-side counterpart to hijack. Waits for the second handshake on the
-// connection, expecting the handshake to be disguised. Expects that the disguise will be shed when
-// the handshake is complete.
-func allowHijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret) (net.Conn, error) {
-	return doHijack(conn, cfg, preshared, tls.Server)
-}
-
-func doHijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret,
+func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret,
 	tlsConn func(net.Conn, *tls.Config) *tls.Conn) (net.Conn, error) {
 
 	if err := conn.Handshake(); err != nil {

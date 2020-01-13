@@ -58,7 +58,7 @@ func TestHijack(t *testing.T) {
 	go func() {
 		defer close(done)
 
-		_, err := allowHijack(serverConn, tlsCfg, secret)
+		_, err := hijack(serverConn, tlsCfg, secret, tls.Server)
 		require.NoError(t, err)
 
 		b := make([]byte, len(clientMsg))
@@ -70,7 +70,7 @@ func TestHijack(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	_, err = hijack(clientConn, tlsCfg, secret)
+	_, err = hijack(clientConn, tlsCfg, secret, tls.Client)
 	require.NoError(t, err)
 
 	_, err = clientConn.Write([]byte(clientMsg))
