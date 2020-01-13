@@ -444,6 +444,10 @@ func (c *serverConn) IV() [16]byte {
 
 type mitmConn struct {
 	net.Conn
+
+	// Any errors returned by onRead or onWrite will result in an error returned by Read or Write
+	// respectively. Though these callback errors may not reflect actual read or write errors,
+	// treating them as such allows for simpler usage of mitmConn.
 	onRead, onWrite func([]byte) error
 }
 

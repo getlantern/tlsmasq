@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// Nonce format:
+//
+// +-------------------------------------------------------------------------+
+// | 8-byte timestamp, nanoseconds since UTC epoch | 24 bytes of random data |
+// +-------------------------------------------------------------------------+
+
 // A nonce used in proxied TLS handshakes. This is used to ensure that the completion signal (sent
 // by the client after a completed handshake) is not replayable.
 type nonce [32]byte
