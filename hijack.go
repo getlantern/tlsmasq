@@ -22,9 +22,7 @@ import (
 // to use a tls.Config which does not support this version and/or suite. However, it is important to
 // set fields like cfg.CipherSuites and cfg.MinVersion to ensure that the security parameters of the
 // hijacked connection are acceptable.
-func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret,
-	tlsConn func(net.Conn, *tls.Config) *tls.Conn) (net.Conn, error) {
-
+func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret, client bool) (net.Conn, error) {
 	if err := conn.Handshake(); err != nil {
 		return nil, fmt.Errorf("proxied handshake failed: %w", err)
 	}
@@ -36,16 +34,21 @@ func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret,
 	if err != nil {
 		return nil, err
 	}
-	hijackedConn := tlsConn(disguisedConn, cfg)
-	if err := hijackedConn.Handshake(); err != nil {
+	var hijacked *tls.Conn
+	if client {
+		hijacked = tls.Client(disguisedConn, cfg)
+	} else {
+		hijacked = tls.Server(disguisedConn, cfg)
+	}
+	if err := hijacked.Handshake(); err != nil {
 		return nil, fmt.Errorf("hijack handshake failed: %w", err)
 	}
 
 	// Now that the handshake is complete, we no longer need the disguise. The connection is
 	// successfully hijacked and further communication will be conducted with the appropriate
 	// version and suite, but newly-negotiated symmetric keys.
-	disguisedConn.inDisguise = false
-	return hijackedConn, nil
+	disguisedConn.shedDisguise()
+	return hijacked, nil
 }
 
 func ensureParameters(cfg *tls.Config, conn ptlshs.Conn) (*tls.Config, error) {
@@ -100,6 +103,9 @@ type disguisedConn struct {
 	// ptlshsConn and the pre-shared secret. Reads will be assumed to be disguised as well.
 	// When unset, this connection just uses the underlying net.Conn directly.
 	inDisguise bool
+
+	// Set when we shed the disguise. Prior to that, this will be nil.
+	standardRead func([]byte) (int, error)
 }
 
 func disguise(conn ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
@@ -108,13 +114,19 @@ func disguise(conn ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error)
 		return nil, fmt.Errorf("failed to derive connection state: %w", err)
 	}
 	return &disguisedConn{
-		conn, state, preshared, conn.IV(), new(bytes.Buffer), new(bytes.Buffer), true,
+		conn, state, preshared, conn.IV(), new(bytes.Buffer), new(bytes.Buffer), true, nil,
 	}, nil
+}
+
+// Not concurrency-safe.
+func (dc *disguisedConn) shedDisguise() {
+	dc.inDisguise = false
+	dc.standardRead = io.MultiReader(dc.processed, dc.unprocessed, dc.Conn).Read
 }
 
 func (dc *disguisedConn) Read(b []byte) (n int, err error) {
 	if !dc.inDisguise {
-		return io.MultiReader(dc.processed, dc.unprocessed, dc.Conn).Read(b)
+		return dc.standardRead(b)
 	}
 
 	// Note: the only error a bytes.Buffer can return is io.EOF, which we would ignore anyway.
@@ -126,7 +138,7 @@ func (dc *disguisedConn) Read(b []byte) (n int, err error) {
 	connReader := io.MultiReader(dc.unprocessed, dc.Conn)
 	record, unprocessed, err := reptls.ReadRecord(connReader, dc.state, dc.preshared, dc.iv)
 	if err != nil {
-		return n, fmt.Errorf("failed to unwrap TLS record: %w", err)
+		return 0, fmt.Errorf("failed to unwrap TLS record: %w", err)
 	}
 	nCopied := copy(b[n:], record)
 	n += nCopied

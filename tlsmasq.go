@@ -56,7 +56,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, err
 	}
-	return newConn(conn.(ptlshs.Conn), d.TLSConfig, tls.Client, d.ProxiedHandshakeConfig.Secret), nil
+	return newConn(conn.(ptlshs.Conn), d.TLSConfig, true, d.ProxiedHandshakeConfig.Secret), nil
 }
 
 // WrapDialer wraps the input dialer with a network dialer which will perform the tlsmasq protocol.
@@ -108,7 +108,7 @@ func (l listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	// We know the type assertion will succeed because we know l.Listener comes from ptlshs.
-	return newConn(conn.(ptlshs.Conn), l.TLSConfig, tls.Server, l.ProxiedHandshakeConfig.Secret), nil
+	return newConn(conn.(ptlshs.Conn), l.TLSConfig, false, l.ProxiedHandshakeConfig.Secret), nil
 }
 
 // WrapListener wraps the input listener with one which speaks the tlsmasq protocol. Accepted

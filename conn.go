@@ -24,21 +24,19 @@ type Conn interface {
 	Handshake() error
 }
 
-type tlsConnFn = func(net.Conn, *tls.Config) *tls.Conn
-
 type conn struct {
 	// A ptlshs.Conn until the handshake has occurred, then just a net.Conn.
 	net.Conn
 
 	cfg          *tls.Config
-	tlsConn      tlsConnFn
+	isClient     bool
 	preshared    ptlshs.Secret
 	shakeOnce    sync.Once
 	handshakeErr error
 }
 
-func newConn(c ptlshs.Conn, cfg *tls.Config, tlsConn tlsConnFn, preshared ptlshs.Secret) *conn {
-	return &conn{c, cfg, tlsConn, preshared, sync.Once{}, nil}
+func newConn(c ptlshs.Conn, cfg *tls.Config, isClient bool, preshared ptlshs.Secret) *conn {
+	return &conn{c, cfg, isClient, preshared, sync.Once{}, nil}
 }
 
 func (c *conn) Read(b []byte) (n int, err error) {
@@ -63,7 +61,7 @@ func (c *conn) Handshake() error {
 }
 
 func (c *conn) handshake() error {
-	hijacked, err := hijack(c.Conn.(ptlshs.Conn), c.cfg, c.preshared, c.tlsConn)
+	hijacked, err := hijack(c.Conn.(ptlshs.Conn), c.cfg, c.preshared, c.isClient)
 	if err != nil {
 		return err
 	}

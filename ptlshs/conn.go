@@ -322,8 +322,8 @@ func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.Co
 		proxied = namedConn{toProxied, "proxied"}
 	)
 
-	// Note: we assume here that the completion signal will arrive in a single read. As it is sent
-	// by clients we control and presently only 100 bytes, that should be a fairly safe assumption.
+	// Note: we assume here that the completion signal will arrive in a single read. This is not
+	// guaranteed, but it is highly likely. Also the penalty is minor - the client can just redial.
 
 	copyFn := func(dst, src namedConn, onRead func([]byte)) func() error {
 		return func() error {
