@@ -1,7 +1,6 @@
 package ptlshs
 
 import (
-	"container/heap"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -44,7 +43,6 @@ type nonceCache struct {
 	startTime  time.Time
 	bucketSpan time.Duration
 
-	evictions   chan time.Duration
 	buckets     map[time.Duration]map[nonce]bool
 	bucketsLock sync.Mutex
 
@@ -54,10 +52,10 @@ type nonceCache struct {
 
 func newNonceCache(sweepEvery time.Duration) *nonceCache {
 	nc := nonceCache{
-		time.Now(), sweepEvery, make(chan time.Duration),
-		map[time.Duration]map[nonce]bool{}, sync.Mutex{}, make(chan struct{}), sync.Once{},
+		time.Now(), sweepEvery,
+		map[time.Duration]map[nonce]bool{}, sync.Mutex{},
+		make(chan struct{}), sync.Once{},
 	}
-	go nc.startEvictor()
 	return &nc
 }
 
@@ -89,62 +87,16 @@ func (nc *nonceCache) getBucket(exp time.Time) map[nonce]bool {
 	}
 	nc.bucketsLock.Unlock()
 	if !ok {
-		nc.evictions <- bucketStart
+		cutoff := nc.startTime.Add(bucketStart + nc.bucketSpan)
+		time.AfterFunc(time.Until(cutoff), func() {
+			nc.bucketsLock.Lock()
+			delete(nc.buckets, bucketStart)
+			nc.bucketsLock.Unlock()
+		})
 	}
 	return bucket
 }
 
-func (nc *nonceCache) startEvictor() {
-	pendingEvictions := new(durationHeap)
-	timer := time.NewTimer(nc.bucketSpan)
-	for {
-		select {
-		case newEviction := <-nc.evictions:
-			heap.Push(pendingEvictions, newEviction)
-			if !timer.Stop() {
-				<-timer.C
-			}
-			nextEviction := pendingEvictions.Peek().(time.Duration) + nc.bucketSpan
-			timer.Reset(time.Until(nc.startTime.Add(nextEviction)))
-		case <-timer.C:
-			if pendingEvictions.Len() > 0 {
-				evicting := heap.Pop(pendingEvictions).(time.Duration)
-				nc.bucketsLock.Lock()
-				delete(nc.buckets, evicting)
-				nc.bucketsLock.Unlock()
-			}
-		case <-nc.done:
-			timer.Stop()
-			return
-		}
-	}
-}
-
 func (nc *nonceCache) close() {
 	nc.closeOnce.Do(func() { close(nc.done) })
-}
-
-// Adapted from https://golang.org/src/container/heap/example_intheap_test.go. Not concurrency-safe.
-type durationHeap []time.Duration
-
-func (h durationHeap) Len() int           { return len(h) }
-func (h durationHeap) Less(i, j int) bool { return h[i] < h[j] }
-func (h durationHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-
-func (h *durationHeap) Push(i interface{}) {
-	*h = append(*h, i.(time.Duration))
-}
-
-func (h *durationHeap) Pop() interface{} {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[:n-1]
-	return x
-}
-
-func (h *durationHeap) Peek() interface{} {
-	popped := heap.Pop(h)
-	heap.Push(h, popped)
-	return popped
 }
