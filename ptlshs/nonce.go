@@ -33,20 +33,19 @@ func (n nonce) expiration() time.Time {
 }
 
 type nonceCache struct {
-	// The nonces we've seen are kept in buckets. Each bucket is assigned a timestamp and each nonce
-	// in the bucket expires before this timestamp. Further, each nonce in the bucket expires no
-	// earlier than bucketDiff before the timestamp. Thus, every nonce can logically only belong to
-	// one bucket. startTime determines the start of the first bucket's span.
+	// We sort nonces we've seen into buckets using their expiration timestamps. Each bucket has a
+	// a beginning, relative to startTime, and a span, equal to bucketSpan. All nonces in a bucket
+	// with beginning b will have an expiration >= b and < b + bucketSpan.
 	//
 	// When the nonce cache is created (in newNonceCache), we start an eviction routine which will
 	// periodically wake up and delete a bucket. When we create a new bucket, we register it with
 	// the evictor using the evictions channel.
 
 	startTime  time.Time
-	bucketDiff time.Duration
+	bucketSpan time.Duration
 
-	evictions   chan time.Time
-	buckets     map[time.Time]map[nonce]bool
+	evictions   chan time.Duration
+	buckets     map[time.Duration]map[nonce]bool
 	bucketsLock sync.Mutex
 
 	done      chan struct{}
@@ -55,8 +54,8 @@ type nonceCache struct {
 
 func newNonceCache(sweepEvery time.Duration) *nonceCache {
 	nc := nonceCache{
-		time.Now(), sweepEvery, make(chan time.Time),
-		map[time.Time]map[nonce]bool{}, sync.Mutex{}, make(chan struct{}), sync.Once{},
+		time.Now(), sweepEvery, make(chan time.Duration),
+		map[time.Duration]map[nonce]bool{}, sync.Mutex{}, make(chan struct{}), sync.Once{},
 	}
 	go nc.startEvictor()
 	return &nc
@@ -80,24 +79,24 @@ func (nc *nonceCache) isValid(n nonce) bool {
 
 func (nc *nonceCache) getBucket(exp time.Time) map[nonce]bool {
 	diff := exp.Sub(nc.startTime)
-	bucketTime := nc.startTime.Add(diff - (diff % nc.bucketDiff) + nc.bucketDiff)
+	bucketStart := diff - (diff % nc.bucketSpan)
 
 	nc.bucketsLock.Lock()
-	bucket, ok := nc.buckets[bucketTime]
+	bucket, ok := nc.buckets[bucketStart]
 	if !ok {
 		bucket = map[nonce]bool{}
-		nc.buckets[bucketTime] = bucket
+		nc.buckets[bucketStart] = bucket
 	}
 	nc.bucketsLock.Unlock()
 	if !ok {
-		nc.evictions <- bucketTime
+		nc.evictions <- bucketStart
 	}
 	return bucket
 }
 
 func (nc *nonceCache) startEvictor() {
-	pendingEvictions := new(timeHeap)
-	timer := time.NewTimer(nc.bucketDiff)
+	pendingEvictions := new(durationHeap)
+	timer := time.NewTimer(nc.bucketSpan)
 	for {
 		select {
 		case newEviction := <-nc.evictions:
@@ -105,10 +104,11 @@ func (nc *nonceCache) startEvictor() {
 			if !timer.Stop() {
 				<-timer.C
 			}
-			timer.Reset(time.Until(pendingEvictions.Peek().(time.Time)))
+			nextEviction := pendingEvictions.Peek().(time.Duration) + nc.bucketSpan
+			timer.Reset(time.Until(nc.startTime.Add(nextEviction)))
 		case <-timer.C:
 			if pendingEvictions.Len() > 0 {
-				evicting := heap.Pop(pendingEvictions).(time.Time)
+				evicting := heap.Pop(pendingEvictions).(time.Duration)
 				nc.bucketsLock.Lock()
 				delete(nc.buckets, evicting)
 				nc.bucketsLock.Unlock()
@@ -125,17 +125,17 @@ func (nc *nonceCache) close() {
 }
 
 // Adapted from https://golang.org/src/container/heap/example_intheap_test.go. Not concurrency-safe.
-type timeHeap []time.Time
+type durationHeap []time.Duration
 
-func (h timeHeap) Len() int           { return len(h) }
-func (h timeHeap) Less(i, j int) bool { return h[i].Before(h[j]) }
-func (h timeHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h durationHeap) Len() int           { return len(h) }
+func (h durationHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h durationHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 
-func (h *timeHeap) Push(i interface{}) {
-	*h = append(*h, i.(time.Time))
+func (h *durationHeap) Push(i interface{}) {
+	*h = append(*h, i.(time.Duration))
 }
 
-func (h *timeHeap) Pop() interface{} {
+func (h *durationHeap) Pop() interface{} {
 	old := *h
 	n := len(old)
 	x := old[n-1]
@@ -143,7 +143,7 @@ func (h *timeHeap) Pop() interface{} {
 	return x
 }
 
-func (h *timeHeap) Peek() interface{} {
+func (h *durationHeap) Peek() interface{} {
 	popped := heap.Pop(h)
 	heap.Push(h, popped)
 	return popped
