@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProxiedSignalLen(t *testing.T) {
+func TestSignalLen(t *testing.T) {
 	// Just a sanity check since this isn't checked at runtime.
 	require.LessOrEqual(t, len(signalPrefix)+len(nonce{}), minSignalLen)
 }

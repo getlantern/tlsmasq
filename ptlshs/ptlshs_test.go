@@ -26,20 +26,20 @@ func TestListenAndDial(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	proxiedL, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialProxied := func() (net.Conn, error) { return net.Dial("tcp", proxiedL.Addr().String()) }
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		conn, err := proxiedL.Accept()
+		conn, err := origin.Accept()
 		require.NoError(t, err)
 		require.NoError(t, conn.(*tls.Conn).Handshake())
 	}()
 
 	dialerCfg := DialerConfig{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: secret}
-	listenerCfg := ListenerConfig{DialProxied: dialProxied, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
@@ -82,26 +82,26 @@ func TestSignalReplay(t *testing.T) {
 	t.Parallel()
 
 	var (
-		secret                      [52]byte
-		timeout                     = time.Second
-		serverMsg, proxiedServerMsg = "hello from the real server", "hello from the proxied server"
+		secret               [52]byte
+		timeout              = time.Second
+		serverMsg, originMsg = "hello from the real server", "hello from the origin"
 	)
 
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	proxiedL, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialProxied := func() (net.Conn, error) { return net.Dial("tcp", proxiedL.Addr().String()) }
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
 	go func() {
 		for i := 0; i < 2; i++ {
-			conn, err := proxiedL.Accept()
+			conn, err := origin.Accept()
 			require.NoError(t, err)
 
 			go func(c net.Conn) {
 				require.NoError(t, c.(*tls.Conn).Handshake())
-				_, err = c.Write([]byte(proxiedServerMsg))
+				_, err = c.Write([]byte(originMsg))
 				require.NoError(t, err)
 			}(conn)
 		}
@@ -161,7 +161,7 @@ func TestSignalReplay(t *testing.T) {
 	_l, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 
-	listenerCfg := ListenerConfig{DialProxied: dialProxied, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
 	l := WrapListener(mitmListener{_l, onServerRead, onServerWrite}, listenerCfg)
 	defer l.Close()
 
@@ -209,16 +209,16 @@ func TestSignalReplay(t *testing.T) {
 	_, err = conn.Write(encryptedSignal)
 	require.NoError(t, err)
 
-	b := make([]byte, len(proxiedServerMsg))
+	b := make([]byte, len(originMsg))
 	n, err := conn.Read(b)
 	require.NoError(t, err)
-	require.Equal(t, proxiedServerMsg, string(b[:n]))
+	require.Equal(t, originMsg, string(b[:n]))
 }
 
-// TestProgressionToProxy ensures that the proxied TLS server progresses to a normal proxy if the
-// client never sends the completion signal. We test with a TCP listener as well to ensure that we
-// are mirroring behavior of the upstream server even when clients start a connection with something
-// other than a TLS ClientHello.
+// TestProgressionToProxy ensures that the proxied connection continues if the client never sends
+// the completion signal. We test with a TCP listener as well to ensure that we are mirroring
+// behavior of the origin server even when clients start a connection with something other than a
+// TLS ClientHello.
 func TestProgressionToProxy(t *testing.T) {
 	listenTLS := func() (net.Listener, error) {
 		return tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
@@ -251,15 +251,15 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	proxiedL, err := listen()
+	origin, err := listen()
 	require.NoError(t, err)
-	dialProxied := func() (net.Conn, error) { return net.Dial("tcp", proxiedL.Addr().String()) }
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		conn, err := proxiedL.Accept()
+		conn, err := origin.Accept()
 		require.NoError(t, err)
 		conn.SetDeadline(time.Now().Add(timeout))
 		if !clientCloses {
@@ -275,13 +275,13 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 		require.NoError(t, err)
 	}()
 
-	listenerCfg := ListenerConfig{DialProxied: dialProxied, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
 	defer l.Close()
 
 	// We expect the Handshake function to run for the duration of the test as it is serving as a
-	// proxy to proxiedL.
+	// proxy to the origin.
 	wg.Add(1)
 	go func() {
 		conn, err := l.Accept()

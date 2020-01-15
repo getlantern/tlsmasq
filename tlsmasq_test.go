@@ -27,15 +27,15 @@ func TestListenAndDial(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	proxiedL, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialProxied := func() (net.Conn, error) { return net.Dial("tcp", proxiedL.Addr().String()) }
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		conn, err := proxiedL.Accept()
+		conn, err := origin.Accept()
 		require.NoError(t, err)
 		require.NoError(t, conn.(*tls.Conn).Handshake())
 	}()
@@ -50,8 +50,8 @@ func TestListenAndDial(t *testing.T) {
 	}
 	listenerCfg := ListenerConfig{
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
-			DialProxied: dialProxied,
-			Secret:      secret,
+			DialOrigin: dialOrigin,
+			Secret:     secret,
 		},
 		TLSConfig: insecureTLSConfig,
 	}

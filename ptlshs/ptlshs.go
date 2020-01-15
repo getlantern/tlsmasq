@@ -31,7 +31,7 @@ type Secret [52]byte
 type DialerConfig struct {
 	// TLSConfig is used for the proxied handshake. If nil, the zero value is used. However, it is
 	// ideal that configuration be provided with the ServerName field set to the name of the
-	// proxied server. This will aid in making the handshake look legitimate.
+	// (proxied) origin server. This will aid in making the handshake look legitimate.
 	TLSConfig *tls.Config
 
 	// A Secret pre-shared between listeners and dialers. This value must be set.
@@ -95,8 +95,8 @@ func DialTimeout(network, address string, cfg DialerConfig, timeout time.Duratio
 
 // ListenerConfig specifies configuration for listening.
 type ListenerConfig struct {
-	// DialProxied is used to create TCP connections to the proxied server. Must not be nil.
-	DialProxied func() (net.Conn, error)
+	// DialOrigin is used to create TCP connections to the origin server. Must not be nil.
+	DialOrigin func() (net.Conn, error)
 
 	// A Secret pre-shared between listeners and dialers.
 	Secret Secret

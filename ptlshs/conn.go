@@ -264,32 +264,32 @@ func (c *serverConn) Handshake() error {
 }
 
 func (c *serverConn) handshake() error {
-	toProxied, err := c.cfg.DialProxied()
+	origin, err := c.cfg.DialOrigin()
 	if err != nil {
-		return fmt.Errorf("failed to dial proxied server: %w", err)
+		return fmt.Errorf("failed to dial origin server: %w", err)
 	}
-	defer toProxied.Close()
+	defer origin.Close()
 
 	// Read and copy ClientHello.
 	b, err := readClientHello(c.Conn, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Client sent something other than ClientHello. Proxy everything to match origin behavior.
-		proxyUntilClose(preconn.Wrap(c.Conn, b), toProxied)
+		proxyUntilClose(preconn.Wrap(c.Conn, b), origin)
 		return fmt.Errorf("did not receive ClientHello: %w", err)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to read ClientHello: %w", err)
 	}
-	_, err = makeNetworkCall(toProxied.Write, b)
+	_, err = makeNetworkCall(origin.Write, b)
 	if err != nil {
-		return fmt.Errorf("failed to write to proxied: %w", err)
+		return fmt.Errorf("failed to write to origin: %w", err)
 	}
 
 	// Read, parse, and copy ServerHello.
-	b, c.state, err = readServerHello(toProxied, listenerReadBufferSize)
+	b, c.state, err = readServerHello(origin, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Origin sent something other than ServerHello. Proxy everything to match origin behavior.
-		proxyUntilClose(c.Conn, preconn.Wrap(toProxied, b))
+		proxyUntilClose(c.Conn, preconn.Wrap(origin, b))
 		return fmt.Errorf("did not receieve ServerHello: %w", err)
 	}
 	if err != nil {
@@ -305,17 +305,16 @@ func (c *serverConn) handshake() error {
 	}
 
 	// Wait until we've received the completion signal.
-	err = c.watchForCompletionSignal(listenerReadBufferSize, *tlsState, toProxied)
+	err = c.watchForCompletion(listenerReadBufferSize, *tlsState, origin)
 	if err != nil {
 		return fmt.Errorf("failed while watching for completion signal: %w", err)
 	}
 	return nil
 }
 
-// Copies data between the client (c.Conn) and the proxied server (c.toProxied), watching client
-// messages for the completion signal. If the signal is received, the connection toProxied will be
-// closed.
-func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.ConnState, toProxied net.Conn) error {
+// Copies data between the client (c.Conn) and the origin server, watching client messages for the
+// completion signal. If the signal is received, the origin connection will be closed.
+func (c *serverConn) watchForCompletion(bufferSize int, tlsState reptls.ConnState, toOrigin net.Conn) error {
 	// Note: we assume here that the completion signal will arrive in a single read. This is not
 	// guaranteed, but it is highly likely. Also the penalty is minor - the client can just redial.
 	foundSignal := false
@@ -324,10 +323,10 @@ func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.Co
 		if ok {
 			foundSignal = true
 
-			// We stop both copy routines by closing the connection to the proxied server. We make
-			// sure to first flush any unprocessed data.
-			toProxied.Write(preSignal)
-			toProxied.Close()
+			// We stop both copy routines by closing the connection to the origin server. We first
+			// attempt to flush any unprocessed data.
+			toOrigin.Write(preSignal)
+			toOrigin.Close()
 
 			// We also need to ensure the unprocessed post-signal data is not lost. We prepend it to
 			// the client connection. Access to c.Conn is single-threaded until the handshake is
@@ -340,11 +339,11 @@ func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.Co
 	var (
 		eg         = new(errgroup.Group)
 		client     = netReadWriter{mitm(c.Conn, onClientRead, nil)}
-		proxied    = netReadWriter{toProxied}
+		origin     = netReadWriter{toOrigin}
 		buf1, buf2 = make([]byte, bufferSize), make([]byte, bufferSize)
 	)
-	eg.Go(func() error { _, err := io.CopyBuffer(client, proxied, buf1); return err })
-	eg.Go(func() error { _, err := io.CopyBuffer(proxied, client, buf2); return err })
+	eg.Go(func() error { _, err := io.CopyBuffer(client, origin, buf1); return err })
+	eg.Go(func() error { _, err := io.CopyBuffer(origin, client, buf2); return err })
 	err := eg.Wait()
 	switch {
 	case foundSignal:

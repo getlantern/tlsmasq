@@ -31,8 +31,8 @@ func Example() {
 	}
 
 	// Start a TCP server which begins with our proxied TLS handshake.
-	dialProxied := func() (net.Conn, error) { return net.Dial("tcp", tlsServerAddr) }
-	listenerCfg := ListenerConfig{DialProxied: dialProxied, Secret: *secret}
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", tlsServerAddr) }
+	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: *secret}
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	defer l.Close()
 

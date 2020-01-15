@@ -36,11 +36,11 @@ func TestHijack(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	serverToProxied, proxiedToServer := testutil.BufferedPipe()
-	proxiedConn := tls.Server(proxiedToServer, tlsCfg)
+	serverToOrigin, originToServer := testutil.BufferedPipe()
+	proxiedConn := tls.Server(originToServer, tlsCfg)
 	go func() { require.NoError(t, proxiedConn.Handshake()) }()
-	defer serverToProxied.Close()
-	defer proxiedToServer.Close()
+	defer serverToOrigin.Close()
+	defer originToServer.Close()
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := ptlshs.Client(clientTransport, ptlshs.DialerConfig{
@@ -48,8 +48,8 @@ func TestHijack(t *testing.T) {
 		Secret:    secret,
 	})
 	serverConn := ptlshs.Server(serverTransport, ptlshs.ListenerConfig{
-		DialProxied: func() (net.Conn, error) { return serverToProxied, nil },
-		Secret:      secret,
+		DialOrigin: func() (net.Conn, error) { return serverToOrigin, nil },
+		Secret:     secret,
 	})
 	defer clientConn.Close()
 	defer serverConn.Close()

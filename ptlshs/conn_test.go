@@ -32,14 +32,14 @@ func TestHandshake(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	serverToProxied, proxiedToServer := testutil.BufferedPipe()
-	proxiedConn := tls.Server(proxiedToServer, tlsCfg)
+	serverToOrigin, originToServer := testutil.BufferedPipe()
+	proxiedConn := tls.Server(originToServer, tlsCfg)
 	go proxiedConn.Handshake()
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := Client(clientTransport, DialerConfig{tlsCfg, secret, 0})
 	serverConn := Server(serverTransport, ListenerConfig{
-		func() (net.Conn, error) { return serverToProxied, nil }, secret, 0, make(chan error)},
+		func() (net.Conn, error) { return serverToOrigin, nil }, secret, 0, make(chan error)},
 	)
 
 	done := make(chan struct{})
