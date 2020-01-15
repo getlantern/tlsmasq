@@ -15,14 +15,15 @@ const (
 )
 
 // ValidateClientHello can be used to identify the input bytes as a TLS ClientHello message. Returns
-// an error iff the input message cannot be parsed as a client hello.
+// an error iff the input message cannot be parsed as a client hello. Returns io.EOF if the message
+// is well-formed, but incomplete.
 func ValidateClientHello(b []byte) error {
 	msgType, b, err := parseHandshakeHeader(b)
 	if err != nil {
 		return err
 	}
 	if msgType != typeClientHello {
-		return fmt.Errorf("expected server hello message, got TLS handshake type %d", b[0])
+		return fmt.Errorf("expected client hello message, got TLS handshake type %d", b[0])
 	}
 
 	m := new(clientHelloMsg)

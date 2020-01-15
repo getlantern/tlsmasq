@@ -216,13 +216,27 @@ func TestSignalReplay(t *testing.T) {
 }
 
 // TestProgressionToProxy ensures that the proxied TLS server progresses to a normal proxy if the
-// client never sends the completion signal.
+// client never sends the completion signal. We test with a TCP listener as well to ensure that we
+// are mirroring behavior of the upstream server even when clients start a connection with something
+// other than a TLS ClientHello.
 func TestProgressionToProxy(t *testing.T) {
-	t.Run("client closes", func(t *testing.T) { progressionToProxyHelper(t, true) })
-	t.Run("server closes", func(t *testing.T) { progressionToProxyHelper(t, false) })
+	listenTLS := func() (net.Listener, error) {
+		return tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	}
+	dialTLS := func(network, address string) (net.Conn, error) {
+		return tls.Dial(network, address, &tls.Config{InsecureSkipVerify: true})
+	}
+	listenTCP := func() (net.Listener, error) { return net.Listen("tcp", "localhost:0") }
+
+	t.Run("client closes TLS", func(t *testing.T) { progressionToProxyHelper(t, listenTLS, dialTLS, true) })
+	t.Run("server closes TLS", func(t *testing.T) { progressionToProxyHelper(t, listenTLS, dialTLS, false) })
+	t.Run("client closes TCP", func(t *testing.T) { progressionToProxyHelper(t, listenTCP, net.Dial, true) })
+	t.Run("server closes TCP", func(t *testing.T) { progressionToProxyHelper(t, listenTCP, net.Dial, false) })
 }
 
-func progressionToProxyHelper(t *testing.T, clientCloses bool) {
+func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
+	dial func(network, address string) (net.Conn, error), clientCloses bool) {
+
 	t.Helper()
 	t.Parallel()
 
@@ -237,7 +251,7 @@ func progressionToProxyHelper(t *testing.T, clientCloses bool) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	proxiedL, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	proxiedL, err := listen()
 	require.NoError(t, err)
 	dialProxied := func() (net.Conn, error) { return net.Dial("tcp", proxiedL.Addr().String()) }
 
@@ -247,11 +261,10 @@ func progressionToProxyHelper(t *testing.T, clientCloses bool) {
 
 		conn, err := proxiedL.Accept()
 		require.NoError(t, err)
+		conn.SetDeadline(time.Now().Add(timeout))
 		if !clientCloses {
 			defer conn.Close()
 		}
-
-		require.NoError(t, conn.(*tls.Conn).Handshake())
 
 		b := make([]byte, len(clientMsg))
 		n, err := conn.Read(b)
@@ -277,12 +290,7 @@ func progressionToProxyHelper(t *testing.T, clientCloses bool) {
 		wg.Done()
 	}()
 
-	conn, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: timeout},
-		"tcp",
-		l.Addr().String(),
-		&tls.Config{InsecureSkipVerify: true},
-	)
+	conn, err := dial(l.Addr().Network(), l.Addr().String())
 	require.NoError(t, err)
 	conn.SetDeadline(time.Now().Add(timeout))
 	if clientCloses {

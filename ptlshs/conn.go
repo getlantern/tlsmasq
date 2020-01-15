@@ -2,7 +2,6 @@ package ptlshs
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -271,21 +270,28 @@ func (c *serverConn) handshake() error {
 	}
 	defer toProxied.Close()
 
-	buf := make([]byte, listenerReadBufferSize)
-
 	// Read and copy ClientHello.
-	clientHello, err := readClientHello(c.Conn, buf)
+	b, err := readClientHello(c.Conn, listenerReadBufferSize)
+	if err != nil && !errors.As(err, new(networkError)) {
+		// Client sent something other than ClientHello. Proxy everything to match origin behavior.
+		proxyUntilClose(preconn.Wrap(c.Conn, b), toProxied)
+		return fmt.Errorf("did not receive ClientHello: %w", err)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to read ClientHello: %w", err)
 	}
-	_, err = makeNetworkCall(toProxied.Write, clientHello)
+	_, err = makeNetworkCall(toProxied.Write, b)
 	if err != nil {
 		return fmt.Errorf("failed to write to proxied: %w", err)
 	}
 
 	// Read, parse, and copy ServerHello.
-	var serverHello []byte
-	serverHello, c.state, err = readServerHello(toProxied, buf)
+	b, c.state, err = readServerHello(toProxied, listenerReadBufferSize)
+	if err != nil && !errors.As(err, new(networkError)) {
+		// Origin sent something other than ServerHello. Proxy everything to match origin behavior.
+		proxyUntilClose(c.Conn, preconn.Wrap(toProxied, b))
+		return fmt.Errorf("did not receieve ServerHello: %w", err)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to parse ServerHello: %w", err)
 	}
@@ -293,7 +299,7 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
 	}
-	_, err = makeNetworkCall(c.Conn.Write, serverHello)
+	_, err = makeNetworkCall(c.Conn.Write, b)
 	if err != nil {
 		return fmt.Errorf("failed to write to client: %w", err)
 	}
@@ -420,32 +426,44 @@ func (c *serverConn) IV() [16]byte {
 	return c.state.iv
 }
 
-// Continuously reads off of conn until the bytes read constitute a valid TLS ClientHello. Does not
-// return until (1) a ClientHello has been received or (2) conn.Read returns a non-temporary error.
-func readClientHello(conn net.Conn, buf []byte) ([]byte, error) {
+// Continuously reads off of conn until one of the following:
+// 	- The bytes read constitute a valid TLS ClientHello.
+//	- The bytes read could not possibly constitute a valid TLS ClientHello.
+//	- A non-temporary network error is encountered.
+// Whatever was read is always returned.
+func readClientHello(conn net.Conn, bufferSize int) ([]byte, error) {
+	buf := make([]byte, bufferSize)
 	read := new(bytes.Buffer)
 	for {
 		n, err := makeNetworkCall(conn.Read, buf)
 		if err != nil {
-			return nil, err
+			return read.Bytes(), networkError{err}
 		}
 		// Note: bytes.Buffer.Write does not return errors.
 		read.Write(buf[:n])
-		if err := reptls.ValidateClientHello(read.Bytes()); err == nil {
+		err = reptls.ValidateClientHello(read.Bytes())
+		if err == nil {
 			return read.Bytes(), nil
+		}
+		if !errors.Is(err, io.EOF) {
+			return read.Bytes(), err
 		}
 	}
 }
 
-// Continuously reads off of conn until the bytes read constitute a valid TLS ServerHello. Does not
-// return until (1) a ServerHello has been receieved or (2) conn.Read returns a non-temporary error.
-// Once the ServerHello is receieved, it is parsed and used to create a connection state.
-func readServerHello(conn net.Conn, buf []byte) ([]byte, *connState, error) {
+// Continuously reads off of conn until one of the following:
+// 	- The bytes read constitute a valid TLS ServerHello.
+//	- The bytes read could not possibly constitute a valid TLS ServerHello.
+//	- A non-temporary network error is encountered.
+// Whatever was read is always returned. When a valid ServerHello is read, it is parsed and used to
+// create a connection state.
+func readServerHello(conn net.Conn, bufferSize int) ([]byte, *connState, error) {
+	buf := make([]byte, bufferSize)
 	read := new(bytes.Buffer)
 	for {
 		n, err := makeNetworkCall(conn.Read, buf)
 		if err != nil {
-			return nil, nil, err
+			return read.Bytes(), nil, networkError{err}
 		}
 		// Note: bytes.Buffer.Write does not return errors.
 		read.Write(buf[:n])
@@ -457,6 +475,9 @@ func readServerHello(conn net.Conn, buf []byte) ([]byte, *connState, error) {
 				return nil, nil, fmt.Errorf("failed to derive sequence and IV: %w", err)
 			}
 			return read.Bytes(), &connState{version, suite, seq, iv, sync.Mutex{}}, nil
+		}
+		if !errors.Is(err, io.EOF) {
+			return read.Bytes(), nil, err
 		}
 	}
 }
@@ -541,11 +562,18 @@ func makeNetworkCall(networkFn func([]byte) (int, error), buf []byte) (int, erro
 	}
 }
 
-func isDone(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return true
-	default:
-		return false
-	}
+type networkError struct {
+	cause error
+}
+
+func (err networkError) Error() string {
+	return err.cause.Error()
+}
+
+func proxyUntilClose(a, b net.Conn) {
+	wg := new(sync.WaitGroup)
+	wg.Add(2)
+	go func() { io.Copy(a, b); wg.Done() }()
+	go func() { io.Copy(b, a); wg.Done() }()
+	wg.Wait()
 }
