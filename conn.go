@@ -24,6 +24,22 @@ type Conn interface {
 	Handshake() error
 }
 
+// Client initializes a client-side connection.
+func Client(conn net.Conn, cfg DialerConfig) Conn {
+	return newConn(
+		ptlshs.Client(conn, cfg.ProxiedHandshakeConfig),
+		cfg.TLSConfig, true, cfg.ProxiedHandshakeConfig.Secret,
+	)
+}
+
+// Server initializes a server-side connection.
+func Server(conn net.Conn, cfg ListenerConfig) Conn {
+	return newConn(
+		ptlshs.Server(conn, cfg.ProxiedHandshakeConfig),
+		cfg.TLSConfig, false, cfg.ProxiedHandshakeConfig.Secret,
+	)
+}
+
 type conn struct {
 	// A ptlshs.Conn until the handshake has occurred, then just a net.Conn.
 	net.Conn
