@@ -1,6 +1,7 @@
 package ptlshs
 
 import (
+	"container/heap"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -11,7 +12,7 @@ import (
 // Nonce format:
 //
 // +-------------------------------------------------------------------------+
-// | 8-byte timestamp, nanoseconds since UTC epoch | 24 bytes of random data |
+// | 8-byte timestamp: nanoseconds since UTC epoch | 24 bytes of random data |
 // +-------------------------------------------------------------------------+
 
 // A nonce used in proxied TLS handshakes. This is used to ensure that the completion signal (sent
@@ -95,19 +96,19 @@ func (nc *nonceCache) getBucket(exp time.Time) map[nonce]bool {
 }
 
 func (nc *nonceCache) startEvictor() {
-	pendingEvictions := sortedTimes{}
+	pendingEvictions := new(timeHeap)
 	timer := time.NewTimer(nc.bucketDiff)
 	for {
 		select {
 		case newEviction := <-nc.evictions:
-			pendingEvictions.insert(newEviction)
+			heap.Push(pendingEvictions, newEviction)
 			if !timer.Stop() {
 				<-timer.C
 			}
-			timer.Reset(time.Until(pendingEvictions.first.t))
+			timer.Reset(time.Until(pendingEvictions.Peek().(time.Time)))
 		case <-timer.C:
-			if pendingEvictions.first != nil {
-				evicting := pendingEvictions.popHead()
+			if pendingEvictions.Len() > 0 {
+				evicting := heap.Pop(pendingEvictions).(time.Time)
 				nc.bucketsLock.Lock()
 				delete(nc.buckets, evicting)
 				nc.bucketsLock.Unlock()
@@ -123,35 +124,27 @@ func (nc *nonceCache) close() {
 	nc.closeOnce.Do(func() { close(nc.done) })
 }
 
-type timeNode struct {
-	t    time.Time
-	next *timeNode
+// Adapted from https://golang.org/src/container/heap/example_intheap_test.go. Not concurrency-safe.
+type timeHeap []time.Time
+
+func (h timeHeap) Len() int           { return len(h) }
+func (h timeHeap) Less(i, j int) bool { return h[i].Before(h[j]) }
+func (h timeHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *timeHeap) Push(i interface{}) {
+	*h = append(*h, i.(time.Time))
 }
 
-type sortedTimes struct {
-	first *timeNode
+func (h *timeHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
 }
 
-func (st *sortedTimes) insert(t time.Time) {
-	newNode := timeNode{t, nil}
-	if st.first == nil {
-		st.first = &newNode
-		return
-	}
-	current := st.first
-	for current.next != nil && current.next.t.Before(t) {
-		current = current.next
-	}
-	newNode.next = current.next
-	current.next = &newNode
-}
-
-// Returns time.Time{} if the list is empty.
-func (st *sortedTimes) popHead() time.Time {
-	if st.first == nil {
-		return time.Time{}
-	}
-	head := st.first
-	st.first = head.next
-	return head.t
+func (h *timeHeap) Peek() interface{} {
+	popped := heap.Pop(h)
+	heap.Push(h, popped)
+	return popped
 }
