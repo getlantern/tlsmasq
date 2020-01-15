@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 
@@ -309,52 +310,16 @@ func (c *serverConn) handshake() error {
 // messages for the completion signal. If the signal is received, the connection toProxied will be
 // closed.
 func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.ConnState, toProxied net.Conn) error {
-	type namedConn struct {
-		net.Conn
-		name string
-	}
-
-	var (
-		groupCtx, stop = context.WithCancel(context.Background())
-		group, ctx     = errgroup.WithContext(groupCtx)
-
-		client  = namedConn{c.Conn, "client"}
-		proxied = namedConn{toProxied, "proxied"}
-	)
-
 	// Note: we assume here that the completion signal will arrive in a single read. This is not
 	// guaranteed, but it is highly likely. Also the penalty is minor - the client can just redial.
-
-	copyFn := func(dst, src namedConn, onRead func([]byte)) func() error {
-		return func() error {
-			buf := make([]byte, bufferSize)
-			for {
-				n, err := makeNetworkCall(src.Read, buf)
-				onRead(buf[:n])
-				if isDone(ctx) {
-					return nil
-				}
-				if err != nil {
-					return fmt.Errorf("failed to read from %s: %w", src.name, err)
-				}
-				_, err = makeNetworkCall(dst.Write, buf[:n])
-				if isDone(ctx) {
-					return nil
-				}
-				if err != nil {
-					return fmt.Errorf("failed to write to %s: %w", dst.name, err)
-				}
-			}
-		}
-	}
-	onClientRead := func(b []byte) {
+	foundSignal := false
+	onClientRead := func(b []byte) error {
 		ok, preSignal, postSignal := c.checkForSignal(b, tlsState)
 		if ok {
-			// Cancel the context to indicate to both routines that work is done.
-			stop()
+			foundSignal = true
 
-			// The other routine will be blocked reading from the proxied server. We unblock it by
-			// closing the connection to the proxied server, after flushing the unprocessed data.
+			// We stop both copy routines by closing the connection to the proxied server. We make
+			// sure to first flush any unprocessed data.
 			toProxied.Write(preSignal)
 			toProxied.Close()
 
@@ -363,14 +328,27 @@ func (c *serverConn) watchForCompletionSignal(bufferSize int, tlsState reptls.Co
 			// complete, so this is safe to do without synchronization.
 			c.Conn = preconn.Wrap(c.Conn, postSignal)
 		}
+		return nil
 	}
 
-	// Note that the following two routines will continue to proxy data between the client and the
-	// proxied server until (1) the completion signal is received or (2) a non-temporary error
-	// occurs. Case 2 covers scenarios in which one peer closes the connection on their end.
-	group.Go(copyFn(client, proxied, func(_ []byte) {}))
-	group.Go(copyFn(proxied, client, onClientRead))
-	return group.Wait()
+	var (
+		eg         = new(errgroup.Group)
+		client     = netReadWriter{mitm(c.Conn, onClientRead, nil)}
+		proxied    = netReadWriter{toProxied}
+		buf1, buf2 = make([]byte, bufferSize), make([]byte, bufferSize)
+	)
+	eg.Go(func() error { _, err := io.CopyBuffer(client, proxied, buf1); return err })
+	eg.Go(func() error { _, err := io.CopyBuffer(proxied, client, buf2); return err })
+	err := eg.Wait()
+	switch {
+	case foundSignal:
+		return nil
+	case err != nil:
+		return err
+	default:
+		// If the copy routines returned before the signal, it means we hit EOF.
+		return io.EOF
+	}
 }
 
 // preSignal and postSignal hold data from b from before and after the signal. These will be non-nil
@@ -535,6 +513,19 @@ func (c mitmConn) Write(b []byte) (n int, err error) {
 		}
 	}
 	return
+}
+
+// Wraps the input io.ReadWriter such that Reads and Writes will be retried on temporary errors.
+type netReadWriter struct {
+	rw io.ReadWriter
+}
+
+func (nrw netReadWriter) Read(b []byte) (n int, err error) {
+	return makeNetworkCall(nrw.rw.Read, b)
+}
+
+func (nrw netReadWriter) Write(b []byte) (n int, err error) {
+	return makeNetworkCall(nrw.rw.Write, b)
 }
 
 // Make a network call, ignoring temporary errors.

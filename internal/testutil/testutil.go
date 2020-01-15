@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 )
 
 // BufferedPipe is like net.Pipe(), but with internal buffering on writes. In practice, our
@@ -23,12 +22,13 @@ func BufferedPipe() (net.Conn, net.Conn) {
 type bufferedConn struct {
 	net.Conn
 	writes    chan []byte
-	closedErr atomic.Value // set to an error if and when the underlying connection is closed
-	closeOnce sync.Once
+	closedErr error // set to an error if and when the underlying connection is closed
+	closed    bool
+	mu        sync.Mutex
 }
 
 func newBufferedConn(conn net.Conn, bufferedWrites int) *bufferedConn {
-	bc := bufferedConn{conn, make(chan []byte, bufferedWrites), atomic.Value{}, sync.Once{}}
+	bc := bufferedConn{conn, make(chan []byte, bufferedWrites), nil, false, sync.Mutex{}}
 	go bc.flushWrites()
 	return &bc
 }
@@ -36,20 +36,32 @@ func newBufferedConn(conn net.Conn, bufferedWrites int) *bufferedConn {
 func (conn *bufferedConn) flushWrites() {
 	for b := range conn.writes {
 		if _, err := conn.Conn.Write(b); err == io.EOF || err == io.ErrClosedPipe {
-			conn.closedErr.Store(err)
+			conn.mu.Lock()
+			conn.closedErr = err
+			conn.mu.Unlock()
 		}
 	}
 }
 
 func (conn *bufferedConn) Write(b []byte) (n int, err error) {
-	if closedErr := conn.closedErr.Load(); closedErr != nil {
-		return 0, closedErr.(error)
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if conn.closedErr != nil {
+		return 0, conn.closedErr
+	}
+	if conn.closed {
+		return 0, io.ErrClosedPipe
 	}
 	conn.writes <- b
 	return len(b), nil
 }
 
 func (conn *bufferedConn) Close() error {
-	conn.closeOnce.Do(func() { close(conn.writes) })
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if !conn.closed {
+		close(conn.writes)
+	}
+	conn.closed = true
 	return conn.Conn.Close()
 }
