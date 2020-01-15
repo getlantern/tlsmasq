@@ -158,7 +158,7 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
-	_, err = reptls.WriteRecord(c.Conn, signal[:], tlsState, c.cfg.Secret, iv)
+	_, err = reptls.WriteRecord(c.Conn, *signal, tlsState, c.cfg.Secret, iv)
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}

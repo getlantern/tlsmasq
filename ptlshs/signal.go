@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"fmt"
+	mathrand "math/rand"
 	"time"
 )
 
@@ -14,13 +15,14 @@ import (
 // +--------------------------------------------------------+
 
 const (
-	// An HTTP GET request will be about 100 bytes so we target this length with our signal.
-	signalLen = 100
+	// We target this range to make our completion signal look like an HTTP request. We could
+	// probably stand to do a bit of research on the best values here.
+	minSignalLen, maxSignalLen = 50, 300
 )
 
 var signalPrefix = []byte("handshake complete")
 
-type completionSignal [signalLen]byte
+type completionSignal []byte
 
 func newCompletionSignal(ttl time.Duration) (*completionSignal, error) {
 	nonce, err := newNonce(ttl)
@@ -28,7 +30,7 @@ func newCompletionSignal(ttl time.Duration) (*completionSignal, error) {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	s := completionSignal{}
+	s := make(completionSignal, mathrand.Intn(maxSignalLen-minSignalLen)+minSignalLen)
 	n := copy(s[:], signalPrefix)
 	n += copy(s[n:], nonce[:])
 	if _, err := rand.Read(s[n:]); err != nil {
@@ -38,13 +40,13 @@ func newCompletionSignal(ttl time.Duration) (*completionSignal, error) {
 }
 
 func parseCompletionSignal(b []byte) (*completionSignal, error) {
-	s := completionSignal{}
-	if len(b) != len(s) {
-		return nil, fmt.Errorf("expected %d bytes, received %d", len(s), len(b))
+	if len(b) < minSignalLen {
+		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLen, len(b))
 	}
 	if !bytes.HasPrefix(b, signalPrefix) {
 		return nil, fmt.Errorf("missing signal prefix")
 	}
+	s := make(completionSignal, len(b))
 	copy(s[:], b[:])
 	return &s, nil
 }

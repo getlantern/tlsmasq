@@ -8,5 +8,5 @@ import (
 
 func TestProxiedSignalLen(t *testing.T) {
 	// Just a sanity check since this isn't checked at runtime.
-	require.LessOrEqual(t, len(signalPrefix)+len(nonce{}), len(completionSignal{}))
+	require.LessOrEqual(t, len(signalPrefix)+len(nonce{}), minSignalLen)
 }
