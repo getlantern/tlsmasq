@@ -34,11 +34,8 @@ func (n nonce) expiration() time.Time {
 type nonceCache struct {
 	// We sort nonces we've seen into buckets using their expiration timestamps. Each bucket has a
 	// a beginning, relative to startTime, and a span, equal to bucketSpan. All nonces in a bucket
-	// with beginning b will have an expiration >= b and < b + bucketSpan.
-	//
-	// When the nonce cache is created (in newNonceCache), we start an eviction routine which will
-	// periodically wake up and delete a bucket. When we create a new bucket, we register it with
-	// the evictor using the evictions channel.
+	// with beginning b will have an expiration >= b and < b + bucketSpan. When all nonces in a
+	// bucket have expired, the bucket will be removed from the buckets map.
 
 	startTime  time.Time
 	bucketSpan time.Duration

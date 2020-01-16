@@ -82,7 +82,7 @@ func WriteRecord(w io.Writer, data []byte, cs *ConnState, secret [52]byte, iv [1
 	return n, nil
 }
 
-// ReadResult is the result of an attempt to read a TLS record. One of either read or err will be
+// ReadResult is the result of an attempt to read a TLS record. One of either Data or Err will be
 // non-nil.
 type ReadResult struct {
 	Data []byte

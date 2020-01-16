@@ -13,7 +13,7 @@ import (
 
 const (
 	// DefaultNonceTTL is used when DialerConfig.NonceTTL is not specified.
-	DefaultNonceTTL = 10 * time.Second
+	DefaultNonceTTL = 30 * time.Minute
 
 	// DefaultNonceSweepInterval is used when ListenerConfig.NonceSweepInterval is not specified.
 	DefaultNonceSweepInterval = time.Minute

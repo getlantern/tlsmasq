@@ -2,7 +2,6 @@ package ptlshs
 
 import (
 	"bytes"
-	"crypto/rand"
 	"fmt"
 	mathrand "math/rand"
 	"time"
@@ -10,9 +9,9 @@ import (
 
 // Completion signal format:
 //
-// +--------------------------------------------------------+
-// | signalPrefix | 32-byte nonce | padding up to signalLen |
-// +--------------------------------------------------------+
+// +-------------------------------------------------------------------+
+// | signalPrefix | 32-byte nonce | padding up to signalLen: all zeros |
+// +-------------------------------------------------------------------+
 
 const (
 	// We target this range to make our completion signal look like an HTTP request. We could
@@ -33,9 +32,6 @@ func newCompletionSignal(ttl time.Duration) (*completionSignal, error) {
 	s := make(completionSignal, mathrand.Intn(maxSignalLen-minSignalLen)+minSignalLen)
 	n := copy(s[:], signalPrefix)
 	n += copy(s[n:], nonce[:])
-	if _, err := rand.Read(s[n:]); err != nil {
-		return nil, fmt.Errorf("failed to generate random padding: %w", err)
-	}
 	return &s, nil
 }
 
