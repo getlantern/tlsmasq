@@ -42,8 +42,10 @@ func TestHandshake(t *testing.T) {
 	clientConn := Client(clientTransport, DialerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
-			TLSConfig: tlsCfg,
-			Secret:    secret,
+			Handshaker: ptlshs.StdLibHandshaker{
+				Config: tlsCfg,
+			},
+			Secret: secret,
 		},
 	})
 	serverConn := Server(serverTransport, ListenerConfig{

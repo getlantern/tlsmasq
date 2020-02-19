@@ -2,7 +2,6 @@ package ptlshs
 
 import (
 	"bytes"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -138,8 +137,8 @@ func (c *clientConn) handshake() error {
 	}
 
 	mitmConn := mitm(c.Conn, onClientRead, nil)
-	tlsConn := tls.Client(mitmConn, c.cfg.TLSConfig)
-	if err := tlsConn.Handshake(); err != nil {
+	hsResult, err := c.cfg.Handshaker.Handshake(mitmConn)
+	if err != nil {
 		return err
 	}
 	if serverRandom == nil {
@@ -149,7 +148,7 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to derive sequence and IV: %w", err)
 	}
-	tlsState, err := reptls.GetState(tlsConn, seq)
+	tlsState, err := reptls.NewConnState(hsResult.Version, hsResult.CipherSuite, seq)
 	if err != nil {
 		return fmt.Errorf("failed to read TLS connection state: %w", err)
 	}
@@ -163,8 +162,7 @@ func (c *clientConn) handshake() error {
 	}
 	// We're overwriting a concurrently accessed field here. However, this is not used until the
 	// handshake is complete, and the handshake is executed in a sync.Once.
-	cs := tlsConn.ConnectionState()
-	c.state = &connState{cs.Version, cs.CipherSuite, seq, iv, sync.Mutex{}}
+	c.state = &connState{hsResult.Version, hsResult.CipherSuite, seq, iv, sync.Mutex{}}
 	return nil
 }
 

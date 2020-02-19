@@ -38,7 +38,12 @@ func TestListenAndDial(t *testing.T) {
 		require.NoError(t, conn.(*tls.Conn).Handshake())
 	}()
 
-	dialerCfg := DialerConfig{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: secret}
+	dialerCfg := DialerConfig{
+		Handshaker: StdLibHandshaker{
+			Config: &tls.Config{InsecureSkipVerify: true},
+		},
+		Secret: secret,
+	}
 	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
@@ -182,7 +187,10 @@ func TestSignalReplay(t *testing.T) {
 	}()
 
 	// Dial once so that our callbacks pick up the signal.
-	dialerCfg := DialerConfig{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: secret}
+	dialerCfg := DialerConfig{
+		Handshaker: StdLibHandshaker{&tls.Config{InsecureSkipVerify: true}},
+		Secret:     secret,
+	}
 	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
 	require.NoError(t, err)
 	require.NoError(t, conn.(Conn).Handshake())

@@ -64,7 +64,12 @@ func Example() {
 	}()
 
 	// Dial with a ptlshs client.
-	dialerCfg := DialerConfig{TLSConfig: &tls.Config{InsecureSkipVerify: true}, Secret: *secret}
+	dialerCfg := DialerConfig{
+		Handshaker: StdLibHandshaker{
+			Config: &tls.Config{InsecureSkipVerify: true},
+		},
+		Secret: *secret,
+	}
 	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
 	if err != nil {
 		panic(err)
