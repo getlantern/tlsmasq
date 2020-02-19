@@ -44,8 +44,10 @@ func TestHijack(t *testing.T) {
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := ptlshs.Client(clientTransport, ptlshs.DialerConfig{
-		TLSConfig: tlsCfg,
-		Secret:    secret,
+		Handshaker: ptlshs.StdLibHandshaker{
+			Config: tlsCfg,
+		},
+		Secret: secret,
 	})
 	serverConn := ptlshs.Server(serverTransport, ptlshs.ListenerConfig{
 		DialOrigin: func() (net.Conn, error) { return serverToOrigin, nil },

@@ -43,8 +43,10 @@ func TestListenAndDial(t *testing.T) {
 	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
 	dialerCfg := DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
-			TLSConfig: insecureTLSConfig,
-			Secret:    secret,
+			Handshaker: ptlshs.StdLibHandshaker{
+				Config: insecureTLSConfig,
+			},
+			Secret: secret,
 		},
 		TLSConfig: insecureTLSConfig,
 	}

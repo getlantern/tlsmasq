@@ -37,7 +37,7 @@ func TestHandshake(t *testing.T) {
 	go proxiedConn.Handshake()
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := Client(clientTransport, DialerConfig{tlsCfg, secret, 0})
+	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
 	serverConn := Server(serverTransport, ListenerConfig{
 		func() (net.Conn, error) { return serverToOrigin, nil }, secret, 0, make(chan error)},
 	)

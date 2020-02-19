@@ -37,12 +37,6 @@ func NewConnState(version, cipherSuite uint16, seq [8]byte) (*ConnState, error) 
 	}, nil
 }
 
-// GetState returns the state of the connection. The sequence number is used as a nonce in some
-// cipher suites. Thus it must be unique per-connection and agreed upon by both client and server.
-func GetState(conn *tls.Conn, seq [8]byte) (*ConnState, error) {
-	return NewConnState(conn.ConnectionState().Version, conn.ConnectionState().CipherSuite, seq)
-}
-
 // explicitNonceLen returns the number of bytes of explicit nonce or IV included
 // in each record. Explicit nonces are present only in CBC modes after TLS 1.0
 // and in certain AEAD modes in TLS 1.2.

@@ -7,6 +7,7 @@ package ptlshs
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"time"
 )
@@ -27,15 +28,46 @@ const listenerReadBufferSize = 1024
 // sent by the dialer.
 type Secret [52]byte
 
+// HandshakeResult is the result of a TLS handshake.
+type HandshakeResult struct {
+	Version, CipherSuite uint16
+}
+
+// Handshaker executes a TLS handshake using the input connection as a transport.
+type Handshaker interface {
+	Handshake(net.Conn) (*HandshakeResult, error)
+}
+
+// StdLibHandshaker execute a TLS handshakes using the Go standard library.
+type StdLibHandshaker struct {
+	// Config for the handshake. May not be nil. ServerName should be set according to the origin
+	// server.
+	Config *tls.Config
+}
+
+// Handshake executes a TLS handshake using conn as a transport.
+func (h StdLibHandshaker) Handshake(conn net.Conn) (*HandshakeResult, error) {
+	if h.Config == nil {
+		return nil, errors.New("std lib handshaker config must not be nil")
+	}
+	tlsConn := tls.Client(conn, h.Config)
+	if err := tlsConn.Handshake(); err != nil {
+		return nil, err
+	}
+	return &HandshakeResult{
+		tlsConn.ConnectionState().Version, tlsConn.ConnectionState().CipherSuite,
+	}, nil
+}
+
 // DialerConfig specifies configuration for dialing.
 type DialerConfig struct {
-	// TLSConfig is used for the proxied handshake. If nil, the zero value is used. However, it is
-	// ideal that configuration be provided with the ServerName field set to the name of the
-	// (proxied) origin server. This will aid in making the handshake look legitimate.
-	TLSConfig *tls.Config
-
 	// A Secret pre-shared between listeners and dialers. This value must be set.
 	Secret Secret
+
+	// Handshaker allows for customization of the handshake with the origin server. This can be
+	// important as the handshake performed by the Go standard library can be fingerprinted. May not
+	// be nil.
+	Handshaker Handshaker
 
 	// NonceTTL specifies the time-to-live for nonces used in completion signals. DefaultNonceTTL is
 	// used if NonceTTL is unspecified.
@@ -44,9 +76,6 @@ type DialerConfig struct {
 
 func (cfg DialerConfig) withDefaults() DialerConfig {
 	newCfg := cfg
-	if cfg.TLSConfig == nil {
-		newCfg.TLSConfig = &tls.Config{}
-	}
 	if cfg.NonceTTL == 0 {
 		newCfg.NonceTTL = DefaultNonceTTL
 	}
@@ -69,6 +98,9 @@ func (d dialer) Dial(network, address string) (net.Conn, error) {
 }
 
 func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if d.Handshaker == nil {
+		return nil, errors.New("handshaker must not be nil")
+	}
 	conn, err := d.Dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
