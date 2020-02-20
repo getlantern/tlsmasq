@@ -83,6 +83,79 @@ func TestListenAndDial(t *testing.T) {
 	wg.Wait()
 }
 
+// TestSessionResumption ensures that ptlshs is compatible with TLS session resumption.
+func TestSessionResumption(t *testing.T) {
+	t.Parallel()
+
+	var (
+		wg      = new(sync.WaitGroup)
+		timeout = time.Second
+
+		secret [52]byte
+	)
+	_, err := rand.Read(secret[:])
+	require.NoError(t, err)
+
+	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	require.NoError(t, err)
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 2; i++ {
+			conn, err := origin.Accept()
+			require.NoError(t, err)
+			require.NoError(t, conn.(*tls.Conn).Handshake())
+		}
+	}()
+
+	handshaker := &resumptionCheckingHandshaker{
+		Config: &tls.Config{
+			InsecureSkipVerify: true,
+			ClientSessionCache: tls.NewLRUClientSessionCache(10),
+			MaxVersion:         tls.VersionTLS12,
+		},
+	}
+	dialerCfg := DialerConfig{secret, handshaker, 0}
+	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+
+	l, err := Listen("tcp", "localhost:0", listenerCfg)
+	require.NoError(t, err)
+	defer l.Close()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 2; i++ {
+			conn, err := l.Accept()
+			require.NoError(t, err)
+			conn.SetDeadline(time.Now().Add(timeout))
+			defer conn.Close()
+
+			require.NoError(t, conn.(Conn).Handshake())
+		}
+	}()
+
+	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	require.NoError(t, err)
+	conn.SetDeadline(time.Now().Add(timeout))
+	defer conn.Close()
+
+	require.NoError(t, conn.(Conn).Handshake())
+	require.NoError(t, conn.Close())
+
+	// Dial a new connection with the same config. This should resume our session.
+	conn, err = DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	require.NoError(t, conn.(Conn).Handshake())
+	require.True(t, handshaker.resumedLastHandshake)
+
+	wg.Wait()
+}
+
 func TestSignalReplay(t *testing.T) {
 	t.Parallel()
 
@@ -325,6 +398,22 @@ func (l mitmListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	return mitm(conn, l.onRead, l.onWrite), nil
+}
+
+type resumptionCheckingHandshaker struct {
+	Config               *tls.Config
+	resumedLastHandshake bool
+}
+
+func (h *resumptionCheckingHandshaker) Handshake(conn net.Conn) (*HandshakeResult, error) {
+	tlsConn := tls.Client(conn, h.Config)
+	if err := tlsConn.Handshake(); err != nil {
+		return nil, err
+	}
+	h.resumedLastHandshake = tlsConn.ConnectionState().DidResume
+	return &HandshakeResult{
+		tlsConn.ConnectionState().Version, tlsConn.ConnectionState().CipherSuite,
+	}, nil
 }
 
 func randomData(t *testing.T, len int) []byte {
