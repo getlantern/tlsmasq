@@ -11,6 +11,14 @@ import (
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
+var (
+	tls13suites = []uint16{
+		tls.TLS_AES_128_GCM_SHA256,
+		tls.TLS_AES_256_GCM_SHA384,
+		tls.TLS_CHACHA20_POLY1305_SHA256,
+	}
+)
+
 // hijack a TLS connection. This new connection will use the same TLS version and cipher suite, but
 // a new set of symmetric keys will be negotiated via a second handshake. The input tls.Config will
 // be used for this second handshake. As such, things like session resumption are also supported.
@@ -69,6 +77,12 @@ func ensureParameters(cfg *tls.Config, conn ptlshs.Conn) (*tls.Config, error) {
 func suiteSupported(cfg *tls.Config, suite uint16) bool {
 	if cfg.CipherSuites == nil {
 		return true
+	}
+	for _, tls13Suite := range tls13suites {
+		if suite == tls13Suite {
+			// TLS 1.3 suites are always supported. See tls.Config.CipherSuites.
+			return true
+		}
 	}
 	for _, supportedSuite := range cfg.CipherSuites {
 		if supportedSuite == suite {
