@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/getlantern/preconn"
-	"github.com/getlantern/tlsmasq/internal/reptls"
+	"github.com/getlantern/tlsutil"
 )
 
 // Conn is a network connection between two peers speaking the ptlshs protocol. Methods returning
@@ -128,7 +128,7 @@ func (c *clientConn) handshake() error {
 		if serverRandom != nil {
 			return nil
 		}
-		serverHello, err := reptls.ParseServerHello(b)
+		serverHello, err := tlsutil.ParseServerHello(b)
 		if err != nil {
 			return fmt.Errorf("failed to parse server hello: %w", err)
 		}
@@ -148,7 +148,7 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to derive sequence and IV: %w", err)
 	}
-	tlsState, err := reptls.NewConnState(hsResult.Version, hsResult.CipherSuite, seq)
+	tlsState, err := tlsutil.NewConnectionState(hsResult.Version, hsResult.CipherSuite, seq)
 	if err != nil {
 		return fmt.Errorf("failed to read TLS connection state: %w", err)
 	}
@@ -156,7 +156,7 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
-	_, err = reptls.WriteRecord(c.Conn, *signal, tlsState, c.cfg.Secret, iv)
+	_, err = tlsutil.WriteRecord(c.Conn, *signal, tlsState, c.cfg.Secret, iv)
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}
@@ -293,7 +293,7 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to parse ServerHello: %w", err)
 	}
-	tlsState, err := reptls.NewConnState(c.state.version, c.state.suite, c.state.seq)
+	tlsState, err := tlsutil.NewConnectionState(c.state.version, c.state.suite, c.state.seq)
 	if err != nil {
 		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
 	}
@@ -312,7 +312,7 @@ func (c *serverConn) handshake() error {
 
 // Copies data between the client (c.Conn) and the origin server, watching client messages for the
 // completion signal. If the signal is received, the origin connection will be closed.
-func (c *serverConn) watchForCompletion(bufferSize int, tlsState reptls.ConnState, toOrigin net.Conn) error {
+func (c *serverConn) watchForCompletion(bufferSize int, tlsState tlsutil.ConnectionState, toOrigin net.Conn) error {
 	// Note: we assume here that the completion signal will arrive in a single read. This is not
 	// guaranteed, but it is highly likely. Also the penalty is minor - the client can just redial.
 	foundSignal := false
@@ -356,7 +356,7 @@ func (c *serverConn) watchForCompletion(bufferSize int, tlsState reptls.ConnStat
 
 // preSignal and postSignal hold data from b from before and after the signal. These will be non-nil
 // iff the signal was found.
-func (c *serverConn) checkForSignal(b []byte, cs reptls.ConnState) (found bool, preSignal, postSignal []byte) {
+func (c *serverConn) checkForSignal(b []byte, cs tlsutil.ConnectionState) (found bool, preSignal, postSignal []byte) {
 	tryToSend := func(errChan chan<- error, err error) {
 		select {
 		case errChan <- err:
@@ -365,7 +365,7 @@ func (c *serverConn) checkForSignal(b []byte, cs reptls.ConnState) (found bool, 
 	}
 
 	preSignalBuf := new(bytes.Buffer)
-	results := reptls.ReadRecords(bytes.NewReader(b), &cs, c.cfg.Secret, c.state.iv)
+	results := tlsutil.ReadRecords(bytes.NewReader(b), &cs, c.cfg.Secret, c.state.iv)
 	for i, result := range results {
 		if result.Err != nil {
 			// Only act if we successfully decrypted. Otherwise, assume this wasn't the signal.
@@ -438,7 +438,7 @@ func readClientHello(conn net.Conn, bufferSize int) ([]byte, error) {
 		}
 		// Note: bytes.Buffer.Write does not return errors.
 		read.Write(buf[:n])
-		err = reptls.ValidateClientHello(read.Bytes())
+		_, err = tlsutil.ValidateClientHello(read.Bytes())
 		if err == nil {
 			return read.Bytes(), nil
 		}
@@ -464,7 +464,7 @@ func readServerHello(conn net.Conn, bufferSize int) ([]byte, *connState, error) 
 		}
 		// Note: bytes.Buffer.Write does not return errors.
 		read.Write(buf[:n])
-		serverHello, err := reptls.ParseServerHello(read.Bytes())
+		serverHello, err := tlsutil.ParseServerHello(read.Bytes())
 		if err == nil {
 			version, suite := serverHello.Version, serverHello.Suite
 			seq, iv, err := deriveSeqAndIV(serverHello.Random)

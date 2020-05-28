@@ -7,8 +7,9 @@ import (
 	"io"
 	"net"
 
-	"github.com/getlantern/tlsmasq/internal/reptls"
 	"github.com/getlantern/tlsmasq/ptlshs"
+
+	"github.com/getlantern/tlsutil"
 )
 
 var (
@@ -105,7 +106,7 @@ func versionSupported(cfg *tls.Config, version uint16) bool {
 type disguisedConn struct {
 	net.Conn
 
-	state     *reptls.ConnState
+	state     *tlsutil.ConnectionState
 	preshared ptlshs.Secret
 	iv        [16]byte
 
@@ -123,7 +124,7 @@ type disguisedConn struct {
 }
 
 func disguise(conn ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
-	state, err := reptls.NewConnState(conn.TLSVersion(), conn.CipherSuite(), conn.NextSeq())
+	state, err := tlsutil.NewConnectionState(conn.TLSVersion(), conn.CipherSuite(), conn.NextSeq())
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive connection state: %w", err)
 	}
@@ -150,7 +151,7 @@ func (dc *disguisedConn) Read(b []byte) (n int, err error) {
 	}
 
 	connReader := io.MultiReader(dc.unprocessed, dc.Conn)
-	record, unprocessed, err := reptls.ReadRecord(connReader, dc.state, dc.preshared, dc.iv)
+	record, unprocessed, err := tlsutil.ReadRecord(connReader, dc.state, dc.preshared, dc.iv)
 	if err != nil {
 		return 0, fmt.Errorf("failed to unwrap TLS record: %w", err)
 	}
@@ -166,7 +167,7 @@ func (dc *disguisedConn) Write(b []byte) (n int, err error) {
 	if !dc.inDisguise {
 		return dc.Conn.Write(b)
 	}
-	n, err = reptls.WriteRecord(dc.Conn, b, dc.state, dc.preshared, dc.iv)
+	n, err = tlsutil.WriteRecord(dc.Conn, b, dc.state, dc.preshared, dc.iv)
 	if err != nil {
 		err = fmt.Errorf("failed to wrap data in TLS record: %w", err)
 	}

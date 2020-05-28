@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/getlantern/tlsmasq/internal/reptls"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/tlsutil"
 )
 
 func TestListenAndDial(t *testing.T) {
@@ -190,7 +191,7 @@ func TestSignalReplay(t *testing.T) {
 	// be done without this information.
 	var (
 		encryptedSignalChan = make(chan []byte, 1)
-		serverHello         *reptls.ServerHello
+		serverHello         *tlsutil.ServerHello
 		serverHelloMu       sync.Mutex // only necessary to appease the race detector
 	)
 	onServerWrite := func(b []byte) error {
@@ -200,7 +201,7 @@ func TestSignalReplay(t *testing.T) {
 			return nil
 		}
 		var err error
-		serverHello, err = reptls.ParseServerHello(b)
+		serverHello, err = tlsutil.ParseServerHello(b)
 		require.NoError(t, err)
 		return nil
 	}
@@ -214,11 +215,11 @@ func TestSignalReplay(t *testing.T) {
 		seq, iv, err := deriveSeqAndIV(serverHello.Random)
 		require.NoError(t, err)
 
-		connState, err := reptls.NewConnState(serverHello.Version, serverHello.Suite, seq)
+		connState, err := tlsutil.NewConnectionState(serverHello.Version, serverHello.Suite, seq)
 		require.NoError(t, err)
 
 		lastN := 0
-		results := reptls.ReadRecords(bytes.NewReader(b), connState, secret, iv)
+		results := tlsutil.ReadRecords(bytes.NewReader(b), connState, secret, iv)
 		for _, result := range results {
 			if result.Err != nil {
 				// If we can't decrypt, assume this wasn't the signal.
