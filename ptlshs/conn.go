@@ -148,7 +148,8 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to derive sequence and IV: %w", err)
 	}
-	tlsState, err := tlsutil.NewConnectionState(hsResult.Version, hsResult.CipherSuite, seq)
+	tlsState, err := tlsutil.NewConnectionState(
+		hsResult.Version, hsResult.CipherSuite, c.cfg.Secret, iv, seq)
 	if err != nil {
 		return fmt.Errorf("failed to read TLS connection state: %w", err)
 	}
@@ -156,7 +157,7 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
-	_, err = tlsutil.WriteRecord(c.Conn, *signal, tlsState, c.cfg.Secret, iv)
+	_, err = tlsutil.WriteRecord(c.Conn, *signal, tlsState)
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}
@@ -293,7 +294,8 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to parse ServerHello: %w", err)
 	}
-	tlsState, err := tlsutil.NewConnectionState(c.state.version, c.state.suite, c.state.seq)
+	tlsState, err := tlsutil.NewConnectionState(
+		c.state.version, c.state.suite, c.cfg.Secret, c.state.iv, c.state.seq)
 	if err != nil {
 		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
 	}
@@ -364,16 +366,22 @@ func (c *serverConn) checkForSignal(b []byte, cs tlsutil.ConnectionState) (found
 		}
 	}
 
-	preSignalBuf := new(bytes.Buffer)
-	results := tlsutil.ReadRecords(bytes.NewReader(b), &cs, c.cfg.Secret, c.state.iv)
-	for i, result := range results {
-		if result.Err != nil {
-			// Only act if we successfully decrypted. Otherwise, assume this wasn't the signal.
+	r := bytes.NewReader(b)
+	unprocessedBuf := new(bufferList)
+	for r.Len() > 0 || unprocessedBuf.len() > 0 {
+		signalStart := len(b) - r.Len() - unprocessedBuf.len()
+		record, unprocessed, err := tlsutil.ReadRecord(io.MultiReader(unprocessedBuf, r), &cs)
+		if unprocessed != nil {
+			unprocessedBuf.prepend(unprocessed)
+		}
+		if err != nil {
+			// If we failed to decrypt, then this must not have been the signal.
 			continue
 		}
-		signal, err := parseCompletionSignal(result.Data)
+
+		signal, err := parseCompletionSignal(record)
 		if err != nil {
-			// Again, only act if this looks like the signal.
+			// Again, this must not have been the signal.
 			tryToSend(c.cfg.NonFatalErrors, fmt.Errorf("decrypted record, but failed to parse signal: %w", err))
 			continue
 		}
@@ -382,11 +390,8 @@ func (c *serverConn) checkForSignal(b []byte, cs tlsutil.ConnectionState) (found
 			tryToSend(c.cfg.NonFatalErrors, errors.New("received bad nonce; likely a signal replay"))
 			continue
 		}
-		postSignal = b[result.N:]
-		if i > 0 {
-			preSignalBuf.Write(b[:results[i-1].N])
-		}
-		return true, preSignalBuf.Bytes(), postSignal
+		signalEnd := len(b) - r.Len() - unprocessedBuf.len()
+		return true, b[:signalStart], b[signalEnd:]
 	}
 	return false, nil, nil
 }

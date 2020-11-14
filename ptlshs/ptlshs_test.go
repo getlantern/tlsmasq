@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/tls"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -162,7 +163,7 @@ func TestSignalReplay(t *testing.T) {
 
 	var (
 		secret               [52]byte
-		timeout              = time.Second
+		timeout              = 10 * time.Second
 		serverMsg, originMsg = "hello from the real server", "hello from the origin"
 	)
 
@@ -215,24 +216,28 @@ func TestSignalReplay(t *testing.T) {
 		seq, iv, err := deriveSeqAndIV(serverHello.Random)
 		require.NoError(t, err)
 
-		connState, err := tlsutil.NewConnectionState(serverHello.Version, serverHello.Suite, seq)
+		connState, err := tlsutil.NewConnectionState(
+			serverHello.Version, serverHello.Suite, secret, iv, seq)
 		require.NoError(t, err)
 
-		lastN := 0
-		results := tlsutil.ReadRecords(bytes.NewReader(b), connState, secret, iv)
-		for _, result := range results {
-			if result.Err != nil {
-				// If we can't decrypt, assume this wasn't the signal.
-				lastN = result.N
-				continue
+		r := bytes.NewReader(b)
+		unprocessedBuf := new(bufferList)
+		for r.Len() > 0 || unprocessedBuf.len() > 0 {
+			signalStart := len(b) - r.Len() - unprocessedBuf.len()
+			record, unprocessed, err := tlsutil.ReadRecord(io.MultiReader(unprocessedBuf, r), connState)
+			if unprocessed != nil {
+				unprocessedBuf.prepend(unprocessed)
 			}
-			_, err := parseCompletionSignal(result.Data)
 			if err != nil {
-				// Again, assume this wasn't the signal.
-				lastN = result.N
+				// Assume this wasn't the signal.
 				continue
 			}
-			encryptedSignalChan <- b[lastN:result.N]
+			if _, err := parseCompletionSignal(record); err != nil {
+				// Assume this wasn't the signal.
+				continue
+			}
+			signalEnd := len(b) - r.Len() - unprocessedBuf.len()
+			encryptedSignalChan <- b[signalStart:signalEnd]
 		}
 		return nil
 	}
