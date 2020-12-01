@@ -302,6 +302,83 @@ func TestSignalReplay(t *testing.T) {
 	require.Equal(t, originMsg, string(b[:n]))
 }
 
+// TestPostHandshakeData ensures that tlsmasq connections are resilient to origins sending data
+// after the handshake has completed. This data should not make it to the client as this would
+// constitute unexpected data and could disrupt the next phase of the connection.
+func TestPostHandshakeData(t *testing.T) {
+	t.Parallel()
+
+	var (
+		wg      = new(sync.WaitGroup)
+		timeout = time.Second
+
+		secret               [52]byte
+		clientMsg, serverMsg = "hello from the client", "hello from the server"
+	)
+	_, err := rand.Read(secret[:])
+	require.NoError(t, err)
+
+	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	require.NoError(t, err)
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		conn, err := origin.Accept()
+		require.NoError(t, err)
+		require.NoError(t, conn.(*tls.Conn).Handshake())
+		// Immediately send some data.
+		_, err = conn.Write([]byte("some nonsense from the origin"))
+		require.NoError(t, err)
+	}()
+
+	dialerCfg := DialerConfig{
+		Handshaker: StdLibHandshaker{
+			Config: &tls.Config{InsecureSkipVerify: true},
+		},
+		Secret: secret,
+	}
+	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+
+	l, err := Listen("tcp", "localhost:0", listenerCfg)
+	require.NoError(t, err)
+	defer l.Close()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		conn, err := l.Accept()
+		require.NoError(t, err)
+		conn.SetDeadline(time.Now().Add(timeout))
+		defer conn.Close()
+
+		b := make([]byte, len(clientMsg))
+		n, err := conn.Read(b)
+		require.NoError(t, err)
+		require.Equal(t, clientMsg, string(b[:n]))
+
+		_, err = conn.Write([]byte(serverMsg))
+		require.NoError(t, err)
+	}()
+
+	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	require.NoError(t, err)
+	conn.SetDeadline(time.Now().Add(timeout))
+	defer conn.Close()
+
+	_, err = conn.Write([]byte(clientMsg))
+	require.NoError(t, err)
+
+	b := make([]byte, len(serverMsg))
+	n, err := conn.Read(b)
+	require.NoError(t, err)
+	// This is where we would see the unexpected data from the origin (wrapped in a TLS record).
+	require.Equal(t, serverMsg, string(b[:n]))
+
+	wg.Wait()
+}
+
 // TestProgressionToProxy ensures that the proxied connection continues if the client never sends
 // the completion signal. We test with a TCP listener as well to ensure that we are mirroring
 // behavior of the origin server even when clients start a connection with something other than a

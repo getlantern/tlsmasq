@@ -3,7 +3,7 @@ package ptlshs
 import (
 	"bytes"
 	"fmt"
-	mathrand "math/rand"
+	"math/rand"
 	"time"
 )
 
@@ -14,30 +14,50 @@ import (
 // +-------------------------------------------------------------------+
 
 const (
-	// We target this range to make our completion signal look like an HTTP request. We could
-	// probably stand to do a bit of research on the best values here.
-	minSignalLen, maxSignalLen = 50, 300
+	// We target this range to make the client completion signal look like an HTTP GET request.
+	minSignalLenClient, maxSignalLenClient = 50, 300
+
+	// The server signal is made to look like the response.
+	minSignalLenServer, maxSignalLenServer = 250, 1400
+
+	serverSignalLenSpread = 50
 )
+
+// Initialized in init. We narrow the range so that the server responses are somewhat consistent.
+var actualMinSignalLenServer int
+
+func init() {
+	// Choose a random number in the range to serve as the minimum for this runtime.
+	actualMinSignalLenServer = rand.Intn(maxSignalLenServer - minSignalLenServer - serverSignalLenSpread)
+}
 
 var signalPrefix = []byte("handshake complete")
 
 type completionSignal []byte
 
-func newCompletionSignal(ttl time.Duration) (*completionSignal, error) {
+func newClientCompletionSignal(ttl time.Duration) (*completionSignal, error) {
 	nonce, err := newNonce(ttl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	s := make(completionSignal, mathrand.Intn(maxSignalLen-minSignalLen)+minSignalLen)
+	s := make(completionSignal, rand.Intn(maxSignalLenClient-minSignalLenClient)+minSignalLenClient)
 	n := copy(s[:], signalPrefix)
-	n += copy(s[n:], nonce[:])
+	copy(s[n:], nonce[:])
+	return &s, nil
+}
+
+func newServerCompletionSignal() (*completionSignal, error) {
+	// We are not concerned about server signals being replayed to clients, so we don't bother
+	// setting the nonce.
+	s := make(completionSignal, rand.Intn(serverSignalLenSpread)+actualMinSignalLenServer)
+	copy(s[:], signalPrefix)
 	return &s, nil
 }
 
 func parseCompletionSignal(b []byte) (*completionSignal, error) {
-	if len(b) < minSignalLen {
-		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLen, len(b))
+	if len(b) < minSignalLenClient {
+		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLenClient, len(b))
 	}
 	if !bytes.HasPrefix(b, signalPrefix) {
 		return nil, fmt.Errorf("missing signal prefix")
