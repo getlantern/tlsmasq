@@ -1,0 +1,24 @@
+version: 2
+jobs:
+  test:
+    docker:
+      - image: circleci/golang:1.15
+    steps:
+      - checkout
+      - add_ssh_keys:
+          fingerprints:
+            "64:e6:c4:ce:cf:20:58:89:24:6e:08:aa:be:e0:d6:ff"
+      - run:
+          name: Download Dependencies
+          command: go get -d -t -v ./...
+      - run:
+          name: Test
+          # We have a lot of concurrency and synchronization in this library. Test with -race and
+          # -count=1000 to expose any timing related bugs.
+          command: go test -race -count=1000 ./...
+
+workflows:
+    version: 2
+    test-workflow:
+        jobs:
+        - test
