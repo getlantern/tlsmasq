@@ -5,7 +5,7 @@ import (
 	"io"
 )
 
-// A linked-list of byte slices, tailored for prepending. Not concurrency-safe.
+// A linked list of byte slices, tailored for prepending. Not concurrency-safe.
 type bufferList struct {
 	// Invariants:
 	//	- next and r may be nil

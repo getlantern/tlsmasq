@@ -1,6 +1,7 @@
 package ptlshs
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"io/ioutil"
@@ -32,13 +33,15 @@ func TestBufferList(t *testing.T) {
 			l.prepend(contents)
 			require.Equal(t, len(contents), l.len())
 
-			readResult, err := ioutil.ReadAll(l)
+			// Read with a small buffer to force partial reading.
+			readBuf := new(bytes.Buffer)
+			_, err := io.CopyBuffer(readBuf, l, make([]byte, 5))
 			require.NoError(t, err)
-			require.Equal(t, contents, readResult)
+			require.Equal(t, contents, readBuf.Bytes())
 
-			readResult, err = ioutil.ReadAll(l)
+			shouldBeEmpty, err := ioutil.ReadAll(l)
 			require.NoError(t, err)
-			require.Equal(t, 0, len(readResult))
+			require.Equal(t, 0, len(shouldBeEmpty))
 		}
 	})
 
@@ -60,13 +63,15 @@ func TestBufferList(t *testing.T) {
 			}
 			require.Equal(t, len(concatContents), l.len())
 
-			readResult, err := ioutil.ReadAll(l)
+			// Read with a small buffer to force partial reading.
+			readBuf := new(bytes.Buffer)
+			_, err := io.CopyBuffer(readBuf, l, make([]byte, 5))
 			require.NoError(t, err)
-			require.Equal(t, concatContents, readResult)
+			require.Equal(t, concatContents, readBuf.Bytes())
 
-			readResult, err = ioutil.ReadAll(l)
+			shouldBeEmpty, err := ioutil.ReadAll(l)
 			require.NoError(t, err)
-			require.Equal(t, 0, len(readResult))
+			require.Equal(t, 0, len(shouldBeEmpty))
 		}
 	})
 }

@@ -11,7 +11,7 @@ func TestNonceCache(t *testing.T) {
 	t.Parallel()
 
 	const (
-		sweepEvery = 100 * time.Millisecond
+		sweepEvery = 200 * time.Millisecond
 		perBatch   = 100
 	)
 

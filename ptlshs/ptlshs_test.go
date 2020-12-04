@@ -19,10 +19,8 @@ func TestListenAndDial(t *testing.T) {
 	t.Parallel()
 
 	var (
-		wg      = new(sync.WaitGroup)
-		timeout = time.Second
-
 		secret               [52]byte
+		wg                   = new(sync.WaitGroup)
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 	_, err := rand.Read(secret[:])
@@ -57,7 +55,6 @@ func TestListenAndDial(t *testing.T) {
 		defer wg.Done()
 		conn, err := l.Accept()
 		require.NoError(t, err)
-		conn.SetDeadline(time.Now().Add(timeout))
 		defer conn.Close()
 
 		b := make([]byte, len(clientMsg))
@@ -69,9 +66,8 @@ func TestListenAndDial(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
 	require.NoError(t, err)
-	conn.SetDeadline(time.Now().Add(timeout))
 	defer conn.Close()
 
 	_, err = conn.Write([]byte(clientMsg))
@@ -90,10 +86,8 @@ func TestSessionResumption(t *testing.T) {
 	t.Parallel()
 
 	var (
-		wg      = new(sync.WaitGroup)
-		timeout = time.Second
-
 		secret [52]byte
+		wg     = new(sync.WaitGroup)
 	)
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
@@ -132,23 +126,21 @@ func TestSessionResumption(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			conn, err := l.Accept()
 			require.NoError(t, err)
-			conn.SetDeadline(time.Now().Add(timeout))
 			defer conn.Close()
 
 			require.NoError(t, conn.(Conn).Handshake())
 		}
 	}()
 
-	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
 	require.NoError(t, err)
-	conn.SetDeadline(time.Now().Add(timeout))
 	defer conn.Close()
 
 	require.NoError(t, conn.(Conn).Handshake())
 	require.NoError(t, conn.Close())
 
 	// Dial a new connection with the same config. This should resume our session.
-	conn, err = DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	conn, err = Dial("tcp", l.Addr().String(), dialerCfg)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -163,7 +155,6 @@ func TestSignalReplay(t *testing.T) {
 
 	var (
 		secret               [52]byte
-		timeout              = 10 * time.Second
 		serverMsg, originMsg = "hello from the real server", "hello from the origin"
 	)
 
@@ -253,15 +244,11 @@ func TestSignalReplay(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			conn, err := l.Accept()
 			require.NoError(t, err)
-			go func(c net.Conn, connNumber int) {
-				_, err = c.Write([]byte(serverMsg))
-				if connNumber == 0 {
-					require.NoError(t, err)
-				} else {
-					// The second one is supposed to fail.
-					require.Error(t, err)
-				}
-			}(conn, i)
+			go func() {
+				// Try to write, but don't check for write errors. This message will only make it to
+				// the client if our replay detection is broken. We would see it in a check below.
+				conn.Write([]byte(serverMsg))
+			}()
 		}
 	}()
 
@@ -270,26 +257,20 @@ func TestSignalReplay(t *testing.T) {
 		Handshaker: StdLibHandshaker{&tls.Config{InsecureSkipVerify: true}},
 		Secret:     secret,
 	}
-	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
 	require.NoError(t, err)
 	require.NoError(t, conn.(Conn).Handshake())
 	defer conn.Close()
 
-	var encryptedSignal []byte
-	select {
-	case encryptedSignal = <-encryptedSignalChan:
-	case <-time.After(timeout):
-		t.Fatal("timed out waiting for captured signal")
-	}
+	encryptedSignal := <-encryptedSignalChan
 
 	// Now we dial again, but with a standard TLS dialer. This should get proxied through to the
 	// TLS listener.
 	conn, err = tls.DialWithDialer(
-		&net.Dialer{Timeout: timeout},
+		&net.Dialer{},
 		"tcp", l.Addr().String(),
 		&tls.Config{InsecureSkipVerify: true})
 	require.NoError(t, err)
-	conn.SetDeadline(time.Now().Add(timeout))
 
 	// Now the server should be waiting for the completion signal. We replay the signal from before
 	// and see how the server responds.
@@ -405,10 +386,8 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 	t.Parallel()
 
 	var (
-		wg      = new(sync.WaitGroup)
-		timeout = time.Second
-
 		secret               [52]byte
+		wg                   = new(sync.WaitGroup)
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 
@@ -425,7 +404,6 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 		conn, err := origin.Accept()
 		require.NoError(t, err)
-		conn.SetDeadline(time.Now().Add(timeout))
 		if !clientCloses {
 			defer conn.Close()
 		}
@@ -456,7 +434,6 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 	conn, err := dial(l.Addr().Network(), l.Addr().String())
 	require.NoError(t, err)
-	conn.SetDeadline(time.Now().Add(timeout))
 	if clientCloses {
 		defer conn.Close()
 	}
