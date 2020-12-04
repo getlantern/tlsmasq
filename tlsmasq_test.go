@@ -7,7 +7,6 @@ import (
 	"net"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/getlantern/tlsmasq/ptlshs"
 	"github.com/stretchr/testify/require"
@@ -17,10 +16,8 @@ func TestListenAndDial(t *testing.T) {
 	t.Parallel()
 
 	var (
-		wg      = new(sync.WaitGroup)
-		timeout = time.Second
-
 		secret               [52]byte
+		wg                   = new(sync.WaitGroup)
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 
@@ -67,7 +64,6 @@ func TestListenAndDial(t *testing.T) {
 		defer wg.Done()
 		conn, err := l.Accept()
 		require.NoError(t, err)
-		conn.SetDeadline(time.Now().Add(timeout))
 		defer conn.Close()
 
 		b := make([]byte, len(clientMsg))
@@ -79,9 +75,8 @@ func TestListenAndDial(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
 	require.NoError(t, err)
-	conn.SetDeadline(time.Now().Add(timeout))
 	defer conn.Close()
 
 	_, err = conn.Write([]byte(clientMsg))
