@@ -177,20 +177,21 @@ func (c *clientConn) handshake() error {
 	return nil
 }
 
-// postSignal holds data read from the connection after the signal. This will be non-nil iff the
-// signal was found. n is the number of bytes read off c.Conn *before* the signal was read.
-// TODO: update doc
+// transcriptBuf should contain everything already received on c.Conn. As more data is read from
+// c.Conn, transcriptBuf should be updated accordingly.
+//
+// Other than its inclusion in the transcript, any data read off c.Conn before the signal is
+// discarded. This data is post-handshake data sent by the origin and forwarded by the tlsmasq
+// server. Passing this data on in calls to c.Read would disrupt the next phase of the connection.
+//
+// The transcript, up until the server signal, is checked via a MAC contained in the signal. This
+// prevents an attack in which a bad actor could inject garbage data, see that the connection is
+// unaffected, and conclude that it is a tlsmasq connection.
+//
+// See https://github.com/getlantern/lantern-internal/issues/4507
 func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, transcriptBuf *bytes.Buffer) error {
-	// We discard any data received before the server's completion signal. This is post-handshake
-	// data sent by the origin and forwarded by the tlsmasq server. Passing this data on in calls to
-	// clientConn.Read would disrupt the next phase of the connection. We know that the server
-	// closes the connection to the origin before sending the completion signal, so any data
-	// received after the signal is valid.
-	//
-	// See https://github.com/getlantern/lantern-internal/issues/4507
-
-	startingTranscriptLen := transcriptBuf.Len()
 	totalRead := 0
+	startingTranscriptLen := transcriptBuf.Len()
 	onRead := func(b []byte) error {
 		totalRead += len(b)
 		return nil

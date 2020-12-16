@@ -23,7 +23,9 @@ import (
 // | signalPrefix | transcript MAC | padding up to signalLen: all zeros |
 // +--------------------------------------------------------------------+
 //
-// TODO: details on transcript MAC (perhaps just a pointer elsewhere)
+// where 'transcript MAC' is a MAC of everything sent from the server to the client. This MAC is
+// performed using SHA-256 and the pre-shared secret. For an explanation of this MAC's purpose, see
+// clientConn.watchForCompletion.
 
 const (
 	// We target this range to make the client completion signal look like an HTTP GET request.
