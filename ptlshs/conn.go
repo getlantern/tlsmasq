@@ -123,9 +123,15 @@ func (c *clientConn) Handshake() error {
 
 func (c *clientConn) handshake() error {
 	var (
-		serverRandom []byte
+		serverRandom         []byte
+		everythingFromServer = new(bytes.Buffer)
+		// TODO: flip saveReads and reset buffers when transitioning to a proxy
+		saveReads = true
 	)
 	onClientRead := func(b []byte) error {
+		if saveReads {
+			everythingFromServer.Write(b)
+		}
 		if serverRandom != nil {
 			return nil
 		}
@@ -136,9 +142,10 @@ func (c *clientConn) handshake() error {
 		serverRandom = serverHello.Random
 		return nil
 	}
+	defer func() { saveReads = false }()
 
-	mitmConn := mitm(c.Conn, onClientRead, nil)
-	hsResult, err := c.cfg.Handshaker.Handshake(mitmConn)
+	c.Conn = mitm(c.Conn, onClientRead, nil)
+	hsResult, err := c.cfg.Handshaker.Handshake(c.Conn)
 	if err != nil {
 		return err
 	}
@@ -154,7 +161,7 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to read TLS connection state: %w", err)
 	}
-	signal, err := newClientCompletionSignal(c.cfg.NonceTTL)
+	signal, err := newClientSignal(c.cfg.NonceTTL)
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
@@ -162,20 +169,29 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}
-	postSignal, err := c.watchForCompletion(tlsState)
+	transcript := make([]byte, everythingFromServer.Len())
+	copy(transcript, everythingFromServer.Bytes())
+	everythingFromServer.Reset()
+	fmt.Printf("client transcript pre-garbage (%d bytes):\n%#x\n", len(transcript), transcript)
+	serverSignal, preSignalLen, err := c.watchForCompletion(tlsState)
 	if err != nil {
 		return fmt.Errorf("error watching for server completion signal: %w", err)
+	}
+	fmt.Printf("preSignalLen: %d; efs.Len: %d\n", preSignalLen, everythingFromServer.Len())
+	transcript = append(transcript, everythingFromServer.Next(preSignalLen)...)
+	fmt.Printf("client transcript (%d bytes):\n%#x\n", len(transcript), transcript)
+	if !serverSignal.validMAC(transcript, c.cfg.Secret) {
+		return errors.New("server signal contains bad transcript MAC")
 	}
 	// We're overwriting concurrently accessed fields here. However, these are not used concurrently
 	// until the handshake is complete.
 	c.state = &connState{hsResult.Version, hsResult.CipherSuite, seq, iv, sync.Mutex{}}
-	c.Conn = preconn.Wrap(c.Conn, postSignal)
 	return nil
 }
 
 // postSignal holds data read from the connection after the signal. This will be non-nil iff the
-// signal was found.
-func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState) (postSignal []byte, err error) {
+// signal was found. n is the number of bytes read off c.Conn *before* the signal was read.
+func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState) (ss serverSignal, n int, err error) {
 	// We discard any data received before the server's completion signal. This is post-handshake
 	// data sent by the origin and forwarded by the tlsmasq server. Passing this data on in calls to
 	// clientConn.Read would disrupt the next phase of the connection. We know that the server
@@ -184,31 +200,40 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState) (post
 	//
 	// See https://github.com/getlantern/lantern-internal/issues/4507
 
+	totalRead := 0
+	onRead := func(b []byte) error {
+		totalRead += len(b)
+		return nil
+	}
+	conn := mitm(c.Conn, onRead, nil)
+
 	unprocessedBuf := new(bufferList)
 	for {
-		r := io.MultiReader(unprocessedBuf, c.Conn)
-		record, unprocessed, err := tlsutil.ReadRecord(r, tlsState)
+		r := io.MultiReader(unprocessedBuf, conn)
+		signalStart := totalRead - unprocessedBuf.len()
+		recordData, unprocessed, err := tlsutil.ReadRecord(r, tlsState)
 		if unprocessed != nil {
 			unprocessedBuf.prepend(unprocessed)
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, io.ErrUnexpectedEOF
+				return nil, 0, io.ErrUnexpectedEOF
 			}
 			// If we failed to decrypt, then this must not have been the signal.
 			continue
 		}
 
-		// We do not check the signal nonce as we are not concerned about server signals being
-		// replayed to clients.
-		if _, err := parseCompletionSignal(record); err != nil {
-			return nil, fmt.Errorf("decrypted record, but failed to parse as signal: %w", err)
+		ss, err := parseServerSignal(recordData)
+		if err != nil {
+			return nil, 0, fmt.Errorf("decrypted record, but failed to parse as signal: %w", err)
 		}
 		postSignal, err := ioutil.ReadAll(unprocessedBuf)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read unprocessed data from buffer: %w", err)
+			return nil, 0, fmt.Errorf("failed to read unprocessed data from buffer: %w", err)
 		}
-		return postSignal, nil
+		// Put unprocessed post-signal data back on the connection.
+		c.Conn = preconn.Wrap(c.Conn, postSignal)
+		return *ss, signalStart, nil
 	}
 }
 
@@ -314,6 +339,17 @@ func (c *serverConn) handshake() error {
 	}
 	defer origin.Close()
 
+	saveClientWrites := true
+	everythingToClient := new(bytes.Buffer)
+	onClientWrite := func(b []byte) error {
+		if saveClientWrites {
+			everythingToClient.Write(b)
+		}
+		return nil
+	}
+	c.Conn = mitm(c.Conn, nil, onClientWrite)
+	defer func() { saveClientWrites = false }()
+
 	// Read and copy ClientHello.
 	b, err := readClientHello(c.Conn, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
@@ -350,16 +386,20 @@ func (c *serverConn) handshake() error {
 	}
 
 	// Wait until we've received the client's completion signal.
-	err = c.watchForCompletion(listenerReadBufferSize, tlsState, origin)
+	_, err = c.watchForCompletion(listenerReadBufferSize, tlsState, origin)
 	if err != nil {
 		return fmt.Errorf("failed while watching for completion signal: %w", err)
 	}
 
+	transcript := everythingToClient.Next(everythingToClient.Len())
+	fmt.Printf("server transcript (%d bytes):\n%#x\n", len(transcript), transcript)
+
 	// Send our own completion signal.
-	signal, err := newServerCompletionSignal()
+	signal, err := newServerSignal(transcript, c.cfg.Secret)
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
+
 	_, err = tlsutil.WriteRecord(c.Conn, *signal, tlsState)
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
@@ -369,8 +409,11 @@ func (c *serverConn) handshake() error {
 }
 
 // Copies data between the client (c.Conn) and the origin server, watching client messages for the
-// completion signal. If the signal is received, the origin connection will be closed.
-func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.ConnectionState, toOrigin net.Conn) error {
+// completion signal. If the signal is received, the origin connection will be closed. The returned
+// transcript reflects everything forwarded from the origin to the client.
+func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.ConnectionState, toOrigin net.Conn) (
+	transcript []byte, err error) {
+
 	// Note: we assume here that the completion signal will arrive in a single read. This is not
 	// guaranteed, but it is highly likely. Also the penalty is minor - the client can just redial.
 	foundSignal := false
@@ -392,23 +435,29 @@ func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.Connec
 		return nil
 	}
 
+	transcriptBuf := new(bytes.Buffer)
+	onClientWrite := func(b []byte) error {
+		transcriptBuf.Write(b)
+		return nil
+	}
+
 	var (
 		eg         = new(errgroup.Group)
-		client     = netReadWriter{mitm(c.Conn, onClientRead, nil)}
+		client     = netReadWriter{mitm(c.Conn, onClientRead, onClientWrite)}
 		origin     = netReadWriter{toOrigin}
 		buf1, buf2 = make([]byte, bufferSize), make([]byte, bufferSize)
 	)
 	eg.Go(func() error { _, err := io.CopyBuffer(client, origin, buf1); return err })
 	eg.Go(func() error { _, err := io.CopyBuffer(origin, client, buf2); return err })
-	err := eg.Wait()
+	err = eg.Wait()
 	switch {
 	case foundSignal:
-		return nil
+		return transcriptBuf.Bytes(), nil
 	case err != nil:
-		return err
+		return nil, err
 	default:
 		// If the copy routines returned before the signal, it means we hit EOF.
-		return io.EOF
+		return nil, io.EOF
 	}
 }
 
@@ -435,7 +484,7 @@ func (c *serverConn) checkForSignal(b []byte, cs *tlsutil.ConnectionState) (foun
 			continue
 		}
 
-		signal, err := parseCompletionSignal(record)
+		signal, err := parseClientSignal(record)
 		if err != nil {
 			// Again, this must not have been the signal.
 			tryToSend(c.cfg.NonFatalErrors, fmt.Errorf("decrypted record, but failed to parse signal: %w", err))

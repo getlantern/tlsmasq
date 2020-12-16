@@ -2,16 +2,28 @@ package ptlshs
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
 	"math/rand"
 	"time"
 )
 
-// Completion signal format:
+// Both the client and the server send a completion signal.
+//
+// Client signal format:
 //
 // +-------------------------------------------------------------------+
-// | signalPrefix | 32-byte nonce | padding up to signalLen: all zeros |
+// | signalPrefix | 32-byte nonce  | padding up to signalLen: all zeros |
 // +-------------------------------------------------------------------+
+//
+// Server signal format:
+//
+// +--------------------------------------------------------------------+
+// | signalPrefix | transcript MAC | padding up to signalLen: all zeros |
+// +--------------------------------------------------------------------+
+//
+// TODO: details on transcript MAC (perhaps just a pointer elsewhere)
 
 const (
 	// We target this range to make the client completion signal look like an HTTP GET request.
@@ -33,42 +45,65 @@ func init() {
 
 var signalPrefix = []byte("handshake complete")
 
-type completionSignal []byte
+type clientSignal []byte
 
-func newClientCompletionSignal(ttl time.Duration) (*completionSignal, error) {
+func newClientSignal(ttl time.Duration) (*clientSignal, error) {
 	nonce, err := newNonce(ttl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	s := make(completionSignal, rand.Intn(maxSignalLenClient-minSignalLenClient)+minSignalLenClient)
-	n := copy(s[:], signalPrefix)
-	copy(s[n:], nonce[:])
-	return &s, nil
+	cs := make(clientSignal, rand.Intn(maxSignalLenClient-minSignalLenClient)+minSignalLenClient)
+	n := copy(cs[:], signalPrefix)
+	copy(cs[n:], nonce[:])
+	return &cs, nil
 }
 
-func newServerCompletionSignal() (*completionSignal, error) {
-	// We are not concerned about server signals being replayed to clients, so we don't bother
-	// setting the nonce.
-	s := make(completionSignal, rand.Intn(serverSignalLenSpread)+actualMinSignalLenServer)
-	copy(s[:], signalPrefix)
-	return &s, nil
-}
-
-func parseCompletionSignal(b []byte) (*completionSignal, error) {
+func parseClientSignal(b []byte) (*clientSignal, error) {
 	if len(b) < minSignalLenClient {
 		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLenClient, len(b))
 	}
 	if !bytes.HasPrefix(b, signalPrefix) {
 		return nil, fmt.Errorf("missing signal prefix")
 	}
-	s := make(completionSignal, len(b))
-	copy(s[:], b[:])
-	return &s, nil
+	cs := make(clientSignal, len(b))
+	copy(cs[:], b[:])
+	return &cs, nil
 }
 
-func (s completionSignal) getNonce() nonce {
+func (cs clientSignal) getNonce() nonce {
 	n := nonce{}
-	copy(n[:], s[len(signalPrefix):])
+	copy(n[:], cs[len(signalPrefix):])
 	return n
+}
+
+type serverSignal []byte
+
+func newServerSignal(transcript []byte, s Secret) (*serverSignal, error) {
+	ss := make(serverSignal, rand.Intn(serverSignalLenSpread)+actualMinSignalLenServer)
+	n := copy(ss[:], signalPrefix)
+	m := hmac.New(sha256.New, s[:sha256.Size])
+	m.Write(transcript)
+	copy(ss[n:], m.Sum(nil))
+	return &ss, nil
+}
+
+func parseServerSignal(b []byte) (*serverSignal, error) {
+	if len(b) < minSignalLenServer {
+		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLenServer, len(b))
+	}
+	if !bytes.HasPrefix(b, signalPrefix) {
+		return nil, fmt.Errorf("missing signal prefix")
+	}
+	ss := make(serverSignal, len(b))
+	copy(ss[:], b[:])
+	return &ss, nil
+}
+
+func (ss serverSignal) validMAC(transcript []byte, s Secret) bool {
+	m := hmac.New(sha256.New, s[:sha256.Size])
+	m.Write(transcript)
+	computed := m.Sum(nil)
+	embedded := ss[len(signalPrefix) : len(signalPrefix)+sha256.Size]
+	return hmac.Equal(computed, embedded)
 }

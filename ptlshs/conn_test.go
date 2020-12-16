@@ -57,7 +57,7 @@ func TestHandshake(t *testing.T) {
 // TestPostHandshakeGarbage ensures that the connection is closed if garbage data is injected
 // between the origin's ServerFinished messaged and the server's completion signal. Otherwise, a bad
 // actor could inject such garbage data to determine whether a connection is a tlsmasq connection.
-func TestPostHandshakeGarbage(t *testing.T) {
+func TestPostHandshakeGarbageOG(t *testing.T) {
 	var (
 		version uint16 = tls.VersionTLS12
 		suite          = tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
@@ -94,13 +94,13 @@ func TestPostHandshakeGarbage(t *testing.T) {
 		_, err := tlsutil.WriteRecord(serverTCP, randomData(t, mathrand.Intn(32*1024)), badServerState)
 		require.NoError(t, err)
 		require.NoError(t, err)
-		signal, err := newServerCompletionSignal()
+		signal, err := newServerSignal([]byte{}, secret)
 		require.NoError(t, err)
 		_, err = tlsutil.WriteRecord(serverTCP, *signal, serverState)
 		require.NoError(t, err)
 	}()
 
-	_, err = client.watchForCompletion(clientState)
+	_, _, err = client.watchForCompletion(clientState)
 	require.Error(t, err)
 
 	<-serverDone
