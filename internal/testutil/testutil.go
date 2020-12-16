@@ -14,7 +14,7 @@ import (
 // https://github.com/golang/go/issues/34502
 func BufferedPipe() (net.Conn, net.Conn) {
 	rx, tx := net.Pipe()
-	return newBufferedConn(rx, 100), newBufferedConn(tx, 100)
+	return newBufferedConn(rx, 10), newBufferedConn(tx, 10)
 }
 
 // A network connection with buffered writes. Only necessary because we use synchronous connections
