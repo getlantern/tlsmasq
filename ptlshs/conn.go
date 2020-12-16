@@ -169,17 +169,15 @@ func (c *clientConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}
+
 	transcript := make([]byte, everythingFromServer.Len())
 	copy(transcript, everythingFromServer.Bytes())
 	everythingFromServer.Reset()
-	fmt.Printf("client transcript pre-garbage (%d bytes):\n%#x\n", len(transcript), transcript)
 	serverSignal, preSignalLen, err := c.watchForCompletion(tlsState)
 	if err != nil {
 		return fmt.Errorf("error watching for server completion signal: %w", err)
 	}
-	fmt.Printf("preSignalLen: %d; efs.Len: %d\n", preSignalLen, everythingFromServer.Len())
 	transcript = append(transcript, everythingFromServer.Next(preSignalLen)...)
-	fmt.Printf("client transcript (%d bytes):\n%#x\n", len(transcript), transcript)
 	if !serverSignal.validMAC(transcript, c.cfg.Secret) {
 		return errors.New("server signal contains bad transcript MAC")
 	}
@@ -391,10 +389,8 @@ func (c *serverConn) handshake() error {
 		return fmt.Errorf("failed while watching for completion signal: %w", err)
 	}
 
-	transcript := everythingToClient.Next(everythingToClient.Len())
-	fmt.Printf("server transcript (%d bytes):\n%#x\n", len(transcript), transcript)
-
 	// Send our own completion signal.
+	transcript := everythingToClient.Next(everythingToClient.Len())
 	signal, err := newServerSignal(transcript, c.cfg.Secret)
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
