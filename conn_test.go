@@ -57,6 +57,8 @@ func TestHandshake(t *testing.T) {
 			Secret: secret,
 		},
 	})
+	defer serverConn.Close()
+	defer clientConn.Close()
 
 	done := make(chan struct{})
 	go func() {

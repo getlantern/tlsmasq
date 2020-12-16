@@ -35,12 +35,16 @@ func TestHandshake(t *testing.T) {
 	serverToOrigin, originToServer := testutil.BufferedPipe()
 	proxiedConn := tls.Server(originToServer, tlsCfg)
 	go proxiedConn.Handshake()
+	defer serverToOrigin.Close()
+	defer originToServer.Close()
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
 	serverConn := Server(serverTransport, ListenerConfig{
 		func() (net.Conn, error) { return serverToOrigin, nil }, secret, 0, make(chan error)},
 	)
+	defer serverConn.Close()
+	defer clientConn.Close()
 
 	done := make(chan struct{})
 	go func() {
