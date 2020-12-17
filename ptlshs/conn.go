@@ -125,8 +125,7 @@ func (c *clientConn) handshake() error {
 	var (
 		serverRandom         []byte
 		everythingFromServer = new(bytes.Buffer)
-		// TODO: flip saveReads and reset buffers when transitioning to a proxy
-		saveReads = true
+		saveReads            = true
 	)
 	onClientRead := func(b []byte) error {
 		if saveReads {
@@ -349,6 +348,7 @@ func (c *serverConn) handshake() error {
 	b, err := readClientHello(c.Conn, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Client sent something other than ClientHello. Proxy everything to match origin behavior.
+		saveClientWrites = false
 		proxyUntilClose(preconn.Wrap(c.Conn, b), origin)
 		return fmt.Errorf("did not receive ClientHello: %w", err)
 	}
@@ -364,8 +364,9 @@ func (c *serverConn) handshake() error {
 	b, c.state, err = readServerHello(origin, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Origin sent something other than ServerHello. Proxy everything to match origin behavior.
+		saveClientWrites = false
 		proxyUntilClose(c.Conn, preconn.Wrap(origin, b))
-		return fmt.Errorf("did not receieve ServerHello: %w", err)
+		return fmt.Errorf("did not receive ServerHello: %w", err)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to parse ServerHello: %w", err)
@@ -379,6 +380,10 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to write to client: %w", err)
 	}
+
+	// TODO: a 'normal' probe will result in c.watchForCompletion running until the prober closes
+	// the connection. During this time, we will continue to buffer everything sent to the prober.
+	// Figure out a way to stop or cap this.
 
 	// Wait until we've received the client's completion signal.
 	_, err = c.watchForCompletion(listenerReadBufferSize, tlsState, origin)
@@ -406,6 +411,9 @@ func (c *serverConn) handshake() error {
 // transcript reflects everything forwarded from the origin to the client.
 func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.ConnectionState, toOrigin net.Conn) (
 	transcript []byte, err error) {
+
+	// TODO: determine some way to watch for the client signal without eternally buffering
+	// The client signal should be in the first application data record, right?
 
 	// Note: we assume here that the completion signal will arrive in a single read. This is not
 	// guaranteed, but it is highly likely. Also the penalty is minor - the client can just redial.
