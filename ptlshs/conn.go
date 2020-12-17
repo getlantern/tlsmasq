@@ -386,8 +386,7 @@ func (c *serverConn) handshake() error {
 	// Figure out a way to stop or cap this.
 
 	// Wait until we've received the client's completion signal.
-	_, err = c.watchForCompletion(listenerReadBufferSize, tlsState, origin)
-	if err != nil {
+	if err := c.watchForCompletion(listenerReadBufferSize, tlsState, origin); err != nil {
 		return fmt.Errorf("failed while watching for completion signal: %w", err)
 	}
 
@@ -409,8 +408,7 @@ func (c *serverConn) handshake() error {
 // Copies data between the client (c.Conn) and the origin server, watching client messages for the
 // completion signal. If the signal is received, the origin connection will be closed. The returned
 // transcript reflects everything forwarded from the origin to the client.
-func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.ConnectionState, toOrigin net.Conn) (
-	transcript []byte, err error) {
+func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.ConnectionState, toOrigin net.Conn) error {
 
 	// TODO: determine some way to watch for the client signal without eternally buffering
 	// The client signal should be in the first application data record, right?
@@ -450,15 +448,15 @@ func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.Connec
 	)
 	eg.Go(func() error { _, err := io.CopyBuffer(client, origin, buf1); return err })
 	eg.Go(func() error { _, err := io.CopyBuffer(origin, client, buf2); return err })
-	err = eg.Wait()
+	err := eg.Wait()
 	switch {
 	case foundSignal:
-		return transcriptBuf.Bytes(), nil
+		return nil
 	case err != nil:
-		return nil, err
+		return err
 	default:
 		// If the copy routines returned before the signal, it means we hit EOF.
-		return nil, io.EOF
+		return io.EOF
 	}
 }
 
