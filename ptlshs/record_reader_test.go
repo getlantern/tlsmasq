@@ -3,11 +3,9 @@ package ptlshs
 import (
 	"bytes"
 	"crypto/tls"
-	"errors"
 	"io"
 	"math/rand"
 	"net"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -111,13 +109,9 @@ func createRecordStream(t *testing.T, dataRecords int) []byte {
 		// Read from the client side until the connection is closed
 		b := make([]byte, 1024)
 		for {
-			_, err := client.Read(b)
-			if err != nil {
-				if errors.Is(err, io.ErrClosedPipe) || strings.Contains("closed network connection", err.Error()) {
-					return
-				}
+			if _, err := client.Read(b); err != nil {
+				return
 			}
-			assert.NoError(t, err)
 		}
 	}()
 	require.NoError(t, server.Handshake())
@@ -127,8 +121,7 @@ func createRecordStream(t *testing.T, dataRecords int) []byte {
 	go func() {
 		b := make([]byte, 1024)
 		for {
-			_, err := server.Read(b)
-			if err != nil && strings.Contains("closed network connection", err.Error()) {
+			if _, err := server.Read(b); err != nil {
 				return
 			}
 		}

@@ -9,7 +9,6 @@ import (
 	"net"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -292,8 +291,7 @@ func TestPostHandshakeData(t *testing.T) {
 	t.Parallel()
 
 	var (
-		wg      = new(sync.WaitGroup)
-		timeout = time.Second
+		wg = new(sync.WaitGroup)
 
 		secret               [52]byte
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
@@ -318,7 +316,10 @@ func TestPostHandshakeData(t *testing.T) {
 
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
-			Config: &tls.Config{InsecureSkipVerify: true},
+			Config: &tls.Config{
+				InsecureSkipVerify: true,
+				Renegotiation:      tls.RenegotiateFreelyAsClient,
+			},
 		},
 		Secret: secret,
 	}
@@ -333,7 +334,6 @@ func TestPostHandshakeData(t *testing.T) {
 		defer wg.Done()
 		conn, err := l.Accept()
 		require.NoError(t, err)
-		conn.SetDeadline(time.Now().Add(timeout))
 		defer conn.Close()
 
 		b := make([]byte, len(clientMsg))
@@ -345,9 +345,8 @@ func TestPostHandshakeData(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	conn, err := DialTimeout("tcp", l.Addr().String(), dialerCfg, timeout)
+	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
 	require.NoError(t, err)
-	conn.SetDeadline(time.Now().Add(timeout))
 	defer conn.Close()
 
 	_, err = conn.Write([]byte(clientMsg))

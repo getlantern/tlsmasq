@@ -79,14 +79,14 @@ func (cs clientSignal) getNonce() nonce {
 	return n
 }
 
+// TODO: better coordination on use of SHA256
+
 type serverSignal []byte
 
-func newServerSignal(transcript []byte, s Secret) (*serverSignal, error) {
+func newServerSignal(transcriptHMACSHA256 []byte) (*serverSignal, error) {
 	ss := make(serverSignal, rand.Intn(serverSignalLenSpread)+actualMinSignalLenServer)
 	n := copy(ss[:], signalPrefix)
-	m := hmac.New(sha256.New, s[:sha256.Size])
-	m.Write(transcript)
-	copy(ss[n:], m.Sum(nil))
+	copy(ss[n:], transcriptHMACSHA256)
 	return &ss, nil
 }
 
@@ -102,10 +102,7 @@ func parseServerSignal(b []byte) (*serverSignal, error) {
 	return &ss, nil
 }
 
-func (ss serverSignal) validMAC(transcript []byte, s Secret) bool {
-	m := hmac.New(sha256.New, s[:sha256.Size])
-	m.Write(transcript)
-	computed := m.Sum(nil)
+func (ss serverSignal) validMAC(mac []byte) bool {
 	embedded := ss[len(signalPrefix) : len(signalPrefix)+sha256.Size]
-	return hmac.Equal(computed, embedded)
+	return hmac.Equal(mac, embedded)
 }
