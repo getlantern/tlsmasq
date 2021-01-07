@@ -197,6 +197,10 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, trans
 	}
 	conn := mitm(c.Conn, onRead, nil)
 
+	// We attempt to decrypt every record we see from the server. We assume that any records we are
+	// unable to decrypt must have come from the origin. The first record we successfully decrypt
+	// should be the server signal.
+
 	unprocessedBuf := new(bufferList)
 	for {
 		r := io.MultiReader(unprocessedBuf, conn)
