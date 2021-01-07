@@ -179,16 +179,14 @@ func (c *clientConn) handshake() error {
 	return nil
 }
 
-// transcriptBuf should contain everything already received on c.Conn. As more data is read from
-// c.Conn, transcriptBuf should be updated accordingly.
-//
 // Other than its inclusion in the transcript, any data read off c.Conn before the signal is
 // discarded. This data is post-handshake data sent by the origin and forwarded by the tlsmasq
 // server. Passing this data on in calls to c.Read would disrupt the next phase of the connection.
 //
-// The transcript, up until the server signal, is checked via a MAC contained in the signal. This
-// prevents an attack in which a bad actor could inject garbage data, see that the connection is
-// unaffected, and conclude that it is a tlsmasq connection.
+// transcriptHMAC should reflect everything already received on c.Conn. This will be used to verify
+// the transcript, using a MAC contained in the server signal. This prevents an attack in which a
+// bad actor could inject garbage data, see that the connection is unaffected, and conclude that it
+// is a tlsmasq connection.
 //
 // See https://github.com/getlantern/lantern-internal/issues/4507
 func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, transcriptHMAC hash.Hash) error {
