@@ -31,9 +31,6 @@ type recordReader struct {
 // read from the stream. The input should reflect the next part of the stream, successive to the
 // input from the last call to read. Any records completed in b are returned.
 func (rr *recordReader) read(b []byte) []tlsRecord {
-
-	// TODO: should we check for oversized records?
-
 	records := []tlsRecord{}
 	buf := bytes.NewBuffer(b)
 	for buf.Len() > 0 {
