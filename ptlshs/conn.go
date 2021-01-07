@@ -489,46 +489,6 @@ func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.Connec
 	}
 }
 
-// preSignal and postSignal hold data from b from before and after the signal. These will be non-nil
-// iff the signal was found.
-func (c *serverConn) checkForSignal(b []byte, cs *tlsutil.ConnectionState) (found bool, preSignal, postSignal []byte) {
-	tryToSend := func(errChan chan<- error, err error) {
-		select {
-		case errChan <- err:
-		default:
-		}
-	}
-
-	r := bytes.NewReader(b)
-	unprocessedBuf := new(bufferList)
-	for r.Len() > 0 || unprocessedBuf.len() > 0 {
-		signalStart := len(b) - r.Len() - unprocessedBuf.len()
-		record, unprocessed, err := tlsutil.ReadRecord(io.MultiReader(unprocessedBuf, r), cs)
-		if unprocessed != nil {
-			unprocessedBuf.prepend(unprocessed)
-		}
-		if err != nil {
-			// If we failed to decrypt, then this must not have been the signal.
-			continue
-		}
-
-		signal, err := parseClientSignal(record)
-		if err != nil {
-			// Again, this must not have been the signal.
-			tryToSend(c.cfg.NonFatalErrors, fmt.Errorf("decrypted record, but failed to parse signal: %w", err))
-			continue
-		}
-		if !c.nonceCache.isValid(signal.getNonce()) {
-			// Looks like a replay. Continue so that the connection will just get proxied.
-			tryToSend(c.cfg.NonFatalErrors, errors.New("received bad nonce; likely a signal replay"))
-			continue
-		}
-		signalEnd := len(b) - r.Len() - unprocessedBuf.len()
-		return true, b[:signalStart], b[signalEnd:]
-	}
-	return false, nil, nil
-}
-
 func (c *serverConn) TLSVersion() uint16 {
 	<-c.handshakeComplete
 	if c.state == nil {

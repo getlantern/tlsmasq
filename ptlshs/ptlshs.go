@@ -138,7 +138,6 @@ type ListenerConfig struct {
 	NonceSweepInterval time.Duration
 
 	// NonFatalErrors will be used to log non-fatal errors. These will likely be due to probes.
-	// TODO: check need for this after changes
 	NonFatalErrors chan<- error
 }
 
