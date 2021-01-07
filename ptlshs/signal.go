@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
+	"hash"
 	"math/rand"
 	"time"
 )
@@ -79,8 +80,6 @@ func (cs clientSignal) getNonce() nonce {
 	return n
 }
 
-// TODO: better coordination on use of SHA256
-
 type serverSignal []byte
 
 func newServerSignal(transcriptHMACSHA256 []byte) (*serverSignal, error) {
@@ -105,4 +104,8 @@ func parseServerSignal(b []byte) (*serverSignal, error) {
 func (ss serverSignal) validMAC(mac []byte) bool {
 	embedded := ss[len(signalPrefix) : len(signalPrefix)+sha256.Size]
 	return hmac.Equal(mac, embedded)
+}
+
+func signalHMAC(s Secret) hash.Hash {
+	return hmac.New(sha256.New, s[:])
 }

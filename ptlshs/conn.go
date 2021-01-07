@@ -2,8 +2,6 @@ package ptlshs
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash"
@@ -126,7 +124,7 @@ func (c *clientConn) Handshake() error {
 
 func (c *clientConn) handshake() error {
 	var (
-		transcriptHMAC = hmac.New(sha256.New, c.cfg.Secret[:])
+		transcriptHMAC = signalHMAC(c.cfg.Secret)
 		transcriptDone = false
 		serverRandom   []byte
 	)
@@ -337,7 +335,7 @@ func (c *serverConn) handshake() error {
 	}
 	defer origin.Close()
 
-	transcriptHMAC := hmac.New(sha256.New, c.cfg.Secret[:])
+	transcriptHMAC := signalHMAC(c.cfg.Secret)
 	transcriptDone := false
 	onClientWrite := func(b []byte) error {
 		if !transcriptDone {
