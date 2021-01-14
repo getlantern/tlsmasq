@@ -1,6 +1,7 @@
 package ptlshs
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -11,50 +12,65 @@ func TestNonceCache(t *testing.T) {
 	t.Parallel()
 
 	const (
-		sweepEvery = 200 * time.Millisecond
-		perBatch   = 100
+		sweepEvery = time.Second
+
+		perBatch = 100
 	)
 
-	// For the first batch, use an expiration such that all will be evicted in the first sweep.
-	firstExpiration := time.Now().Add(sweepEvery / 2)
-	firstBatch := []nonce{}
-	for i := 0; i < perBatch; i++ {
-		n, err := newNonce(time.Until(firstExpiration))
-		require.NoError(t, err)
-		firstBatch = append(firstBatch, *n)
-	}
+	t.Run("valid only once", func(t *testing.T) {
+		batch := []nonce{}
+		for i := 0; i < perBatch; i++ {
+			batch = append(batch, newNonceWithExpiration(t, time.Now().Add(time.Minute)))
+		}
 
-	// We will have a second batch with a much later expiration.
-	secondExpiration := time.Now().Add(sweepEvery * 10)
-	secondBatch := []nonce{}
-	for i := 0; i < perBatch; i++ {
-		n, err := newNonce(time.Until(secondExpiration))
-		require.NoError(t, err)
-		secondBatch = append(secondBatch, *n)
-	}
+		nc := newNonceCache(sweepEvery)
+		defer nc.close()
 
-	nc := newNonceCache(sweepEvery)
-	defer nc.close()
+		for i := 0; i < perBatch; i++ {
+			require.True(t, nc.isValid(batch[i]))
+		}
+		require.Equal(t, perBatch, nc.count())
+		for i := 0; i < perBatch; i++ {
+			require.False(t, nc.isValid(batch[i]))
+		}
+		require.Equal(t, perBatch, nc.count())
+	})
 
-	for _, nonce := range concat(firstBatch, secondBatch) {
-		require.True(t, nc.isValid(nonce))
-	}
-	require.Equal(t, perBatch*2, nc.count())
-	for _, nonce := range concat(firstBatch, secondBatch) {
-		require.False(t, nc.isValid(nonce))
-	}
-	require.Equal(t, perBatch*2, nc.count())
+	t.Run("eviction", func(t *testing.T) {
+		var (
+			firstExpiration  = time.Now()
+			secondExpiration = firstExpiration.Add(5 * sweepEvery)
+		)
 
-	// Wait for the first batch to expire, plus a sweep interval to ensure the evicter has time.
-	time.Sleep(time.Until(firstExpiration.Add(sweepEvery)))
+		firstBatch, secondBatch := []nonce{}, []nonce{}
+		for i := 0; i < perBatch; i++ {
+			firstBatch = append(firstBatch, newNonceWithExpiration(t, firstExpiration))
+			secondBatch = append(secondBatch, newNonceWithExpiration(t, secondExpiration))
+		}
 
-	// Sanity check that we didn't oversleep (in case values change).
-	require.True(t, time.Now().Before(secondExpiration))
+		nc := newNonceCache(sweepEvery)
+		// Ensure the first batch will be expired.
+		nc.now = func() time.Time { return firstExpiration.Add(2 * sweepEvery) }
+		defer nc.close()
 
-	require.Equal(t, perBatch, nc.count())
-	for _, nonce := range concat(firstBatch, secondBatch) {
-		require.False(t, nc.isValid(nonce))
-	}
+		for i := 0; i < perBatch; i++ {
+			require.False(t, nc.isValid(firstBatch[i]))
+		}
+		require.Equal(t, 0, nc.count())
+		for i := 0; i < perBatch; i++ {
+			require.True(t, nc.isValid(secondBatch[i]))
+		}
+		require.Equal(t, perBatch, nc.count())
+	})
+}
+
+func newNonceWithExpiration(t *testing.T, exp time.Time) nonce {
+	t.Helper()
+	// this TTL does not matter; we're about to overwrite the expiration
+	n, err := newNonce(time.Hour)
+	require.NoError(t, err)
+	binary.LittleEndian.PutUint64(n[:], uint64(exp.UnixNano()))
+	return *n
 }
 
 func (nc *nonceCache) count() int {
@@ -66,12 +82,4 @@ func (nc *nonceCache) count() int {
 		count += len(bucket)
 	}
 	return count
-}
-
-func concat(n ...[]nonce) []nonce {
-	result := []nonce{}
-	for _, a := range n {
-		result = append(result, a...)
-	}
-	return result
 }
