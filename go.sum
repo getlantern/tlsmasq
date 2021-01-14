@@ -2,6 +2,8 @@ github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/getlantern/preconn v0.0.0-20200108054315-514883d3a351 h1:UxZdswEJEO37GLjj5RHXBl/3800LoImb1Iu36MQ4kj8=
 github.com/getlantern/preconn v0.0.0-20200108054315-514883d3a351/go.mod h1:FvIxQD61iYA42UjaJyzGl9DNne8jbowbgicdeNk/7kE=
+github.com/getlantern/preconn v0.0.0-20210114204151-c3e17ae79a75 h1:2Cb6UL2GCPEyUV04YSnoY/86xTC6UXECumqSNYTUX8E=
+github.com/getlantern/preconn v0.0.0-20210114204151-c3e17ae79a75/go.mod h1:FvIxQD61iYA42UjaJyzGl9DNne8jbowbgicdeNk/7kE=
 github.com/getlantern/tlsutil v0.3.0 h1:4k5tIcRkeGSlLZl1lzzf/l6k6f734x1iOrZ5N7ignHQ=
 github.com/getlantern/tlsutil v0.3.0/go.mod h1:8v4sW+apnxSkhURB6IUpQ9zuf1r0+i+CywWSZHxXpzw=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

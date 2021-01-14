@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"io/ioutil"
 	"net"
 	"sync"
 
@@ -222,15 +221,11 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, trans
 		if err != nil {
 			return fmt.Errorf("decrypted record, but failed to parse as signal: %w", err)
 		}
-		postSignal, err := ioutil.ReadAll(unprocessedBuf)
-		if err != nil {
-			return fmt.Errorf("failed to read unprocessed data from buffer: %w", err)
-		}
 		if !ss.validMAC(transcriptHMAC.Sum(nil)) {
 			return fmt.Errorf("server signal contains bad transcript MAC")
 		}
 		// Put unprocessed post-signal data back on the connection.
-		c.Conn = preconn.Wrap(c.Conn, postSignal)
+		c.Conn = preconn.WrapReader(c.Conn, unprocessedBuf)
 		return nil
 	}
 }
