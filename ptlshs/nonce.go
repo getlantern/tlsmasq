@@ -45,23 +45,20 @@ type nonceCache struct {
 
 	done      chan struct{}
 	closeOnce sync.Once
-
-	// Used in testing. Defaults to time.Now().
-	now func() time.Time
 }
 
 func newNonceCache(sweepEvery time.Duration) *nonceCache {
 	nc := nonceCache{
 		time.Now(), sweepEvery,
 		map[time.Duration]map[nonce]bool{}, sync.Mutex{},
-		make(chan struct{}), sync.Once{}, time.Now,
+		make(chan struct{}), sync.Once{},
 	}
 	return &nc
 }
 
 func (nc *nonceCache) isValid(n nonce) bool {
 	expiration := n.expiration()
-	if nc.now().After(expiration) {
+	if time.Now().After(expiration) {
 		return false
 	}
 	bucket := nc.getBucket(expiration)
@@ -88,7 +85,7 @@ func (nc *nonceCache) getBucket(exp time.Time) map[nonce]bool {
 	nc.bucketsLock.Unlock()
 	if !ok {
 		cutoff := nc.startTime.Add(bucketStart + nc.bucketSpan)
-		time.AfterFunc(cutoff.Sub(nc.now()), func() {
+		time.AfterFunc(time.Until(cutoff), func() {
 			nc.bucketsLock.Lock()
 			delete(nc.buckets, bucketStart)
 			nc.bucketsLock.Unlock()

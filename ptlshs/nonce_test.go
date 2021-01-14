@@ -38,8 +38,8 @@ func TestNonceCache(t *testing.T) {
 
 	t.Run("eviction", func(t *testing.T) {
 		var (
-			firstExpiration  = time.Now()
-			secondExpiration = firstExpiration.Add(5 * sweepEvery)
+			firstExpiration  = time.Now().Add(-5 * sweepEvery)
+			secondExpiration = time.Now().Add(5 * sweepEvery)
 		)
 
 		firstBatch, secondBatch := []nonce{}, []nonce{}
@@ -49,8 +49,6 @@ func TestNonceCache(t *testing.T) {
 		}
 
 		nc := newNonceCache(sweepEvery)
-		// Ensure the first batch will be expired.
-		nc.now = func() time.Time { return firstExpiration.Add(2 * sweepEvery) }
 		defer nc.close()
 
 		for i := 0; i < perBatch; i++ {
