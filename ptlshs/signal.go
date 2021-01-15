@@ -2,53 +2,110 @@ package ptlshs
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
-	mathrand "math/rand"
+	"hash"
+	"math/rand"
 	"time"
 )
 
-// Completion signal format:
+// Both the client and the server send a completion signal.
+//
+// Client signal format:
 //
 // +-------------------------------------------------------------------+
-// | signalPrefix | 32-byte nonce | padding up to signalLen: all zeros |
+// | signalPrefix | 32-byte nonce  | padding up to signalLen: all zeros |
 // +-------------------------------------------------------------------+
+//
+// Server signal format:
+//
+// +--------------------------------------------------------------------+
+// | signalPrefix | transcript MAC | padding up to signalLen: all zeros |
+// +--------------------------------------------------------------------+
+//
+// where 'transcript MAC' is a MAC of everything sent from the server to the client. This MAC is
+// performed using SHA-256 and the pre-shared secret. For an explanation of this MAC's purpose, see
+// clientConn.watchForCompletion.
 
 const (
-	// We target this range to make our completion signal look like an HTTP request. We could
-	// probably stand to do a bit of research on the best values here.
-	minSignalLen, maxSignalLen = 50, 300
+	// We target this range to make the client completion signal look like an HTTP GET request.
+	minSignalLenClient, maxSignalLenClient = 50, 300
+
+	// The server signal is made to look like the response.
+	minSignalLenServer, maxSignalLenServer = 250, 1400
+
+	serverSignalLenSpread = 50
 )
+
+// Initialized in init. We narrow the range so that the server responses are somewhat consistent.
+var actualMinSignalLenServer int
+
+func init() {
+	// Choose a random number in the range to serve as the minimum for this runtime.
+	actualMinSignalLenServer = rand.Intn(maxSignalLenServer - minSignalLenServer - serverSignalLenSpread)
+}
 
 var signalPrefix = []byte("handshake complete")
 
-type completionSignal []byte
+type clientSignal []byte
 
-func newCompletionSignal(ttl time.Duration) (*completionSignal, error) {
+func newClientSignal(ttl time.Duration) (*clientSignal, error) {
 	nonce, err := newNonce(ttl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	s := make(completionSignal, mathrand.Intn(maxSignalLen-minSignalLen)+minSignalLen)
-	n := copy(s[:], signalPrefix)
-	n += copy(s[n:], nonce[:])
-	return &s, nil
+	cs := make(clientSignal, rand.Intn(maxSignalLenClient-minSignalLenClient)+minSignalLenClient)
+	n := copy(cs[:], signalPrefix)
+	copy(cs[n:], nonce[:])
+	return &cs, nil
 }
 
-func parseCompletionSignal(b []byte) (*completionSignal, error) {
-	if len(b) < minSignalLen {
-		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLen, len(b))
+func parseClientSignal(b []byte) (*clientSignal, error) {
+	if len(b) < minSignalLenClient {
+		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLenClient, len(b))
 	}
 	if !bytes.HasPrefix(b, signalPrefix) {
 		return nil, fmt.Errorf("missing signal prefix")
 	}
-	s := make(completionSignal, len(b))
-	copy(s[:], b[:])
-	return &s, nil
+	cs := make(clientSignal, len(b))
+	copy(cs[:], b[:])
+	return &cs, nil
 }
 
-func (s completionSignal) getNonce() nonce {
+func (cs clientSignal) getNonce() nonce {
 	n := nonce{}
-	copy(n[:], s[len(signalPrefix):])
+	copy(n[:], cs[len(signalPrefix):])
 	return n
+}
+
+type serverSignal []byte
+
+func newServerSignal(transcriptHMACSHA256 []byte) (*serverSignal, error) {
+	ss := make(serverSignal, rand.Intn(serverSignalLenSpread)+actualMinSignalLenServer)
+	n := copy(ss[:], signalPrefix)
+	copy(ss[n:], transcriptHMACSHA256)
+	return &ss, nil
+}
+
+func parseServerSignal(b []byte) (*serverSignal, error) {
+	if len(b) < minSignalLenServer {
+		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLenServer, len(b))
+	}
+	if !bytes.HasPrefix(b, signalPrefix) {
+		return nil, fmt.Errorf("missing signal prefix")
+	}
+	ss := make(serverSignal, len(b))
+	copy(ss[:], b[:])
+	return &ss, nil
+}
+
+func (ss serverSignal) validMAC(mac []byte) bool {
+	embedded := ss[len(signalPrefix) : len(signalPrefix)+sha256.Size]
+	return hmac.Equal(mac, embedded)
+}
+
+func signalHMAC(s Secret) hash.Hash {
+	return hmac.New(sha256.New, s[:])
 }

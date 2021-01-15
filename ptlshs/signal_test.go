@@ -1,12 +1,15 @@
 package ptlshs
 
 import (
+	"crypto/sha256"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestSignalLen(t *testing.T) {
-	// Just a sanity check since this isn't checked at runtime.
-	require.LessOrEqual(t, len(signalPrefix)+len(nonce{}), minSignalLen)
+	// Sanity checks not checked at runtime.
+	require.LessOrEqual(t, len(signalPrefix)+len(nonce{}), minSignalLenClient)
+	require.LessOrEqual(t, minSignalLenClient, minSignalLenServer)
+	require.GreaterOrEqual(t, minSignalLenServer, len(signalPrefix)+sha256.Size)
 }

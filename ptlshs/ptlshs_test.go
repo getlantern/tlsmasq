@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"io"
+	mathrand "math/rand"
 	"net"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsutil"
 )
 
@@ -222,7 +224,7 @@ func TestSignalReplay(t *testing.T) {
 				// Assume this wasn't the signal.
 				continue
 			}
-			if _, err := parseCompletionSignal(record); err != nil {
+			if _, err := parseClientSignal(record); err != nil {
 				// Assume this wasn't the signal.
 				continue
 			}
@@ -280,6 +282,214 @@ func TestSignalReplay(t *testing.T) {
 	n, err := conn.Read(b)
 	require.NoError(t, err)
 	require.Equal(t, originMsg, string(b[:n]))
+}
+
+// TestPostHandshakeData ensures that tlsmasq connections are resilient to origins sending data
+// after the handshake has completed. This data should not make it to the client as this would
+// constitute unexpected data and could disrupt the next phase of the connection.
+func TestPostHandshakeData(t *testing.T) {
+	t.Parallel()
+
+	var (
+		wg = new(sync.WaitGroup)
+
+		secret               [52]byte
+		clientMsg, serverMsg = "hello from the client", "hello from the server"
+	)
+	_, err := rand.Read(secret[:])
+	require.NoError(t, err)
+
+	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	require.NoError(t, err)
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		conn, err := origin.Accept()
+		require.NoError(t, err)
+		require.NoError(t, conn.(*tls.Conn).Handshake())
+		// Immediately send some data.
+		_, err = conn.Write([]byte("some nonsense from the origin"))
+		require.NoError(t, err)
+	}()
+
+	dialerCfg := DialerConfig{
+		Handshaker: StdLibHandshaker{
+			Config: &tls.Config{
+				InsecureSkipVerify: true,
+				Renegotiation:      tls.RenegotiateFreelyAsClient,
+			},
+		},
+		Secret: secret,
+	}
+	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+
+	l, err := Listen("tcp", "localhost:0", listenerCfg)
+	require.NoError(t, err)
+	defer l.Close()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		conn, err := l.Accept()
+		require.NoError(t, err)
+		defer conn.Close()
+
+		b := make([]byte, len(clientMsg))
+		n, err := conn.Read(b)
+		require.NoError(t, err)
+		require.Equal(t, clientMsg, string(b[:n]))
+
+		_, err = conn.Write([]byte(serverMsg))
+		require.NoError(t, err)
+	}()
+
+	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, err = conn.Write([]byte(clientMsg))
+	require.NoError(t, err)
+
+	b := make([]byte, len(serverMsg))
+	n, err := conn.Read(b)
+	require.NoError(t, err)
+	// This is where we would see the unexpected data from the origin (wrapped in a TLS record).
+	require.Equal(t, serverMsg, string(b[:n]))
+
+	wg.Wait()
+}
+
+// TestPostHandshakeInjection ensures that the connection is closed if garbage data is injected
+// between the origin's ServerFinished messaged and the server's completion signal. Otherwise, a bad
+// actor could inject such garbage data to determine whether a connection is a tlsmasq connection.
+func TestPostHandshakeInjection(t *testing.T) {
+	t.Parallel()
+
+	// We will set up a connection between a client, a server, and a masqueraded origin. We will
+	// inject garbage data into the server-to-client connection, between the origin's ServerFinished
+	// message and the server's completion signal. This should cause the client and server to have
+	// different transcripts and the client should notice this when it checks the MAC in the
+	// server's completion signal.
+
+	var (
+		wg = new(sync.WaitGroup)
+
+		secret         [52]byte
+		injectorSecret [52]byte
+		injectorIV     [16]byte
+		injectorSeq    [8]byte
+	)
+	for _, b := range [][]byte{secret[:], injectorSecret[:], injectorIV[:], injectorSeq[:]} {
+		_, err := rand.Read(b)
+		require.NoError(t, err)
+	}
+	injectorState, err := tlsutil.NewConnectionState(
+		tls.VersionTLS12, tls.TLS_CHACHA20_POLY1305_SHA256, injectorSecret, injectorIV, injectorSeq)
+	require.NoError(t, err)
+
+	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	require.NoError(t, err)
+	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		conn, err := origin.Accept()
+		require.NoError(t, err)
+		require.NoError(t, conn.(*tls.Conn).Handshake())
+	}()
+
+	dialerCfg := DialerConfig{
+		Handshaker: StdLibHandshaker{
+			Config: &tls.Config{InsecureSkipVerify: true},
+		},
+		Secret: secret,
+	}
+	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+
+	_client, _server := testutil.BufferedPipe()
+
+	// When we see the client signal, we block the server's read and inject garbage into the client
+	// side of the connection.
+	var (
+		serverHello   *tlsutil.ServerHello
+		serverHelloMu sync.Mutex // only necessary to appease the race detector
+
+		serverReadBuf = new(bufferList)
+	)
+	onServerWrite := func(b []byte) error {
+		serverHelloMu.Lock()
+		defer serverHelloMu.Unlock()
+		if serverHello != nil {
+			return nil
+		}
+		var err error
+		serverHello, err = tlsutil.ParseServerHello(b)
+		require.NoError(t, err)
+		return nil
+	}
+	onServerRead := func(b []byte) error {
+		serverHelloMu.Lock()
+		defer serverHelloMu.Unlock()
+		if serverHello == nil {
+			return nil
+		}
+
+		seq, iv, err := deriveSeqAndIV(serverHello.Random)
+		require.NoError(t, err)
+
+		connState, err := tlsutil.NewConnectionState(
+			serverHello.Version, serverHello.Suite, secret, iv, seq)
+		require.NoError(t, err)
+
+		r := bytes.NewReader(b)
+		totalUnprocessed := r.Len() + serverReadBuf.len()
+		for r.Len() > 0 || serverReadBuf.len() > 0 {
+			record, unprocessed, err := tlsutil.ReadRecord(io.MultiReader(serverReadBuf, r), connState)
+			if unprocessed != nil {
+				serverReadBuf.prepend(unprocessed)
+			}
+			if r.Len()+serverReadBuf.len() == totalUnprocessed {
+				// The input slice does not contain a full record. Wait for the next read.
+				return nil
+			}
+			totalUnprocessed = r.Len() + serverReadBuf.len()
+			if err != nil {
+				// Assume this wasn't the signal.
+				continue
+			}
+			if _, err := parseClientSignal(record); err != nil {
+				// Assume this wasn't the signal.
+				continue
+			}
+
+			// Now we know that the current read contains the client signal. Inject our garbage data
+			// before the server can send its own signal. If the garbage data is not in a TLS
+			// record, the client connection may hang (as it awaits the rest of the data in the
+			// "record"). This is acceptable as far as we're concerned, but makes testing harder.
+			// So we send the garbage data in a record encrypted with a different set of parameters.
+			// The client will still get the garbage data, but not hang.
+			_, err = tlsutil.WriteRecord(_server, randomData(t, 1024+mathrand.Intn(31*1024)), injectorState)
+			require.NoError(t, err)
+		}
+		return nil
+	}
+
+	client := Client(_client, dialerCfg)
+	server := Server(mitm(_server, onServerRead, onServerWrite), listenerCfg)
+	defer server.Close()
+	defer client.Close()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Handshake()
+	}()
+
+	require.Error(t, client.Handshake())
+	wg.Wait()
 }
 
 // TestProgressionToProxy ensures that the proxied connection continues if the client never sends
