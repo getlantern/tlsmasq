@@ -1,3 +1,5 @@
+// Command hit-origin tests a tlsmasq connection against an origin site. To achieve this, we start a
+// local tlsmasq server pointed at the origin and handshake with this local server.
 package main
 
 import (
@@ -122,9 +124,11 @@ func main() {
 			fail("failed to auto-determine cert info:", err)
 		}
 		if *serverName == "" {
+			fmt.Fprintln(os.Stderr, "auto-determined SNI:", _sni)
 			*serverName = _sni
 		}
 		if keyAlg == x509.UnknownPublicKeyAlgorithm {
+			fmt.Fprintln(os.Stderr, "auto-determined key algorithm:", _keyAlg)
 			keyAlg = _keyAlg
 		}
 	}
