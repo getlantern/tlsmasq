@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	utls "github.com/getlantern/utls"
+
 	"github.com/getlantern/tlsmasq"
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
@@ -92,6 +94,27 @@ func startServer(origin string, keyAlg x509.PublicKeyAlgorithm, s ptlshs.Secret)
 	return
 }
 
+// utlsHandshaker implements tlsmasq/ptlshs.Handshaker. This allows us to parrot browsers like
+// Chrome in our handshakes with tlsmasq origins.
+type utlsHandshaker struct {
+	cfg *utls.Config
+	id  utls.ClientHelloID
+}
+
+func (h *utlsHandshaker) Handshake(conn net.Conn) (*ptlshs.HandshakeResult, error) {
+	uconn := utls.UClient(conn, h.cfg, h.id)
+	res, err := func() (*ptlshs.HandshakeResult, error) {
+		if err := uconn.Handshake(); err != nil {
+			return nil, err
+		}
+		return &ptlshs.HandshakeResult{
+			Version:     uconn.ConnectionState().Version,
+			CipherSuite: uconn.ConnectionState().CipherSuite,
+		}, nil
+	}()
+	return res, err
+}
+
 func fail(a ...interface{}) {
 	fmt.Fprintln(os.Stderr, a...)
 	os.Exit(1)
@@ -144,10 +167,11 @@ func main() {
 
 	cfg := tlsmasq.DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
-			Handshaker: ptlshs.StdLibHandshaker{
-				Config: &tls.Config{
+			Handshaker: &utlsHandshaker{
+				cfg: &utls.Config{
 					ServerName: *serverName,
 				},
+				id: utls.HelloChrome_83,
 			},
 			Secret: ptlshs.Secret{},
 		},

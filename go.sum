@@ -4,8 +4,12 @@ github.com/getlantern/preconn v0.0.0-20200108054315-514883d3a351 h1:UxZdswEJEO37
 github.com/getlantern/preconn v0.0.0-20200108054315-514883d3a351/go.mod h1:FvIxQD61iYA42UjaJyzGl9DNne8jbowbgicdeNk/7kE=
 github.com/getlantern/tlsutil v0.3.0 h1:4k5tIcRkeGSlLZl1lzzf/l6k6f734x1iOrZ5N7ignHQ=
 github.com/getlantern/tlsutil v0.3.0/go.mod h1:8v4sW+apnxSkhURB6IUpQ9zuf1r0+i+CywWSZHxXpzw=
+github.com/getlantern/utls v0.0.0-20200903013459-0c02248f7ce1 h1:+Egmu6VMMPm8/FHz8TOtQ1Usn3zg0gkS7ZHrLFycyok=
+github.com/getlantern/utls v0.0.0-20200903013459-0c02248f7ce1/go.mod h1:81/JblRrFcHdL/b50CIN3OuJmkt41KbgnjQu+mBSbgQ=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/refraction-networking/utls v0.0.0-20201210053706-2179f286686b h1:lzo71oHzQEz0fKMSjR0BpVzuh2hOHvJTxnN3Rnikmtg=
+github.com/refraction-networking/utls v0.0.0-20201210053706-2179f286686b/go.mod h1:tz9gX959MEFfFN5whTIocCLUG57WiILqtdVxI8c6Wj0=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.6.1 h1:hDPOHmpOpP40lSULcqw7IrRb/u7w6RpDC9399XyoNd0=
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
