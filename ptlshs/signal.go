@@ -43,7 +43,9 @@ var actualMinSignalLenServer int
 
 func init() {
 	// Choose a random number in the range to serve as the minimum for this runtime.
-	actualMinSignalLenServer = rand.Intn(maxSignalLenServer - minSignalLenServer - serverSignalLenSpread)
+	rand.Seed(time.Now().UnixNano())
+	randSpread := maxSignalLenServer - minSignalLenServer - serverSignalLenSpread
+	actualMinSignalLenServer = rand.Intn(randSpread) + minSignalLenServer
 }
 
 var signalPrefix = []byte("handshake complete")
