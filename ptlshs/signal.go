@@ -32,8 +32,10 @@ const (
 	// We target this range to make the client completion signal look like an HTTP GET request.
 	minSignalLenClient, maxSignalLenClient = 50, 300
 
-	// The server signal is made to look like the response.
-	minSignalLenServer, maxSignalLenServer = 250, 1400
+	// The server signal is made to look like the response. The maximum payload size for supported
+	// cipher suites is in the range of 1151 to 1187 bytes. We cap the server signal below this
+	// range to avoid complications from split records.
+	minSignalLenServer, maxSignalLenServer = 250, 1150
 
 	serverSignalLenSpread = 50
 )
