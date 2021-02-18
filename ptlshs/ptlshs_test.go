@@ -241,10 +241,17 @@ func TestSignalReplay(t *testing.T) {
 	l := WrapListener(mitmListener{_l, onServerRead, onServerWrite}, listenerCfg)
 	defer l.Close()
 
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
 		for i := 0; i < 2; i++ {
 			conn, err := l.Accept()
 			require.NoError(t, err)
+			go func() {
+				// Avoid polluting test output by ensuring blocked I/O is cleaned up.
+				<-done
+				conn.Close()
+			}()
 			go func() {
 				// Try to write, but don't check for write errors. This message will only make it to
 				// the client if our replay detection is broken. We would see it in a check below.

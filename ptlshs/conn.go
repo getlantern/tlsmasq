@@ -271,12 +271,10 @@ type serverConn struct {
 	nonceCache *nonceCache
 	closeCache bool
 
-	// One of the following is initialized after Handshake().
-	state        *connState
-	handshakeErr error
+	// Initialized if the handshake completes successfully.
+	state *connState
 
-	shakeOnce         sync.Once
-	handshakeComplete chan struct{}
+	shakeOnce, closeOnce *once
 }
 
 // Server initializes a server-side connection.
@@ -288,7 +286,7 @@ func Server(toClient net.Conn, cfg ListenerConfig) Conn {
 
 // Ignores cfg.NonceSweepInterval.
 func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
-	return &serverConn{toClient, cfg, cache, closeCache, nil, nil, sync.Once{}, make(chan struct{})}
+	return &serverConn{toClient, cfg, cache, closeCache, nil, newOnce(), newOnce()}
 }
 
 func (c *serverConn) Read(b []byte) (n int, err error) {
@@ -306,10 +304,12 @@ func (c *serverConn) Write(b []byte) (n int, err error) {
 }
 
 func (c *serverConn) Close() error {
-	if c.closeCache {
-		c.nonceCache.close()
-	}
-	return c.Conn.Close()
+	return c.closeOnce.do(func() error {
+		if c.closeCache {
+			c.nonceCache.close()
+		}
+		return c.Conn.Close()
+	})
 }
 
 // Handshake performs the ptlshs handshake protocol, if it has not yet been performed. Note that,
@@ -318,11 +318,9 @@ func (c *serverConn) Close() error {
 // closes the connection on its end. As a result, this function should be treated as one which may
 // be long-running or never return.
 func (c *serverConn) Handshake() error {
-	c.shakeOnce.Do(func() {
-		c.handshakeErr = c.handshake()
-		close(c.handshakeComplete)
+	return c.shakeOnce.do(func() error {
+		return c.handshake()
 	})
-	return c.handshakeErr
 }
 
 func (c *serverConn) handshake() error {
@@ -465,14 +463,26 @@ func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.Connec
 	}
 
 	var (
-		eg         = new(errgroup.Group)
+		g          = new(errgroup.Group)
+		gWaitErr   = make(chan error, 1)
 		client     = netReadWriter{mitm(c.Conn, onClientRead, nil)}
 		origin     = netReadWriter{toOrigin}
 		buf1, buf2 = make([]byte, bufferSize), make([]byte, bufferSize)
+		err        error
 	)
-	eg.Go(func() error { _, err := io.CopyBuffer(client, origin, buf1); return err })
-	eg.Go(func() error { _, err := io.CopyBuffer(origin, client, buf2); return err })
-	err := eg.Wait()
+	g.Go(func() error { _, err := io.CopyBuffer(client, origin, buf1); return err })
+	g.Go(func() error { _, err := io.CopyBuffer(origin, client, buf2); return err })
+	go func() { gWaitErr <- g.Wait() }()
+	select {
+	case err = <-gWaitErr:
+	case <-c.closeOnce.done:
+		// If the client and origin connections are not closed, we may leak the copy routines. The
+		// connections should be closed elsewhere, but it doesn't hurt to be sure.
+		c.Conn.Close()
+		toOrigin.Close()
+		// TODO: replace with net.ErrClosed upon update to Go 1.16.
+		err = errors.New("use of closed network connection")
+	}
 	switch {
 	case foundSignal:
 		return nil
@@ -485,7 +495,7 @@ func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.Connec
 }
 
 func (c *serverConn) TLSVersion() uint16 {
-	<-c.handshakeComplete
+	<-c.shakeOnce.done
 	if c.state == nil {
 		return 0
 	}
@@ -493,7 +503,7 @@ func (c *serverConn) TLSVersion() uint16 {
 }
 
 func (c *serverConn) CipherSuite() uint16 {
-	<-c.handshakeComplete
+	<-c.shakeOnce.done
 	if c.state == nil {
 		return 0
 	}
@@ -501,7 +511,7 @@ func (c *serverConn) CipherSuite() uint16 {
 }
 
 func (c *serverConn) NextSeq() [8]byte {
-	<-c.handshakeComplete
+	<-c.shakeOnce.done
 	if c.state == nil {
 		return [8]byte{}
 	}
@@ -509,7 +519,7 @@ func (c *serverConn) NextSeq() [8]byte {
 }
 
 func (c *serverConn) IV() [16]byte {
-	<-c.handshakeComplete
+	<-c.shakeOnce.done
 	if c.state == nil {
 		return [16]byte{}
 	}
@@ -670,4 +680,27 @@ func proxyUntilClose(a, b net.Conn) {
 	go func() { io.Copy(a, b); wg.Done() }()
 	go func() { io.Copy(b, a); wg.Done() }()
 	wg.Wait()
+}
+
+type once struct {
+	once sync.Once
+
+	err  error
+	done chan struct{}
+}
+
+func newOnce() *once {
+	return &once{done: make(chan struct{})}
+}
+
+func (cond *once) wait() {
+	<-cond.done
+}
+
+func (cond *once) do(f func() error) error {
+	cond.once.Do(func() {
+		cond.err = f()
+		close(cond.done)
+	})
+	return cond.err
 }
