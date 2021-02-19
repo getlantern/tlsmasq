@@ -41,13 +41,19 @@ func TestRecordReader(t *testing.T) {
 	})
 	t.Run("multiple reads", func(t *testing.T) {
 		var (
-			rr        = new(recordReader)
-			records   = []tlsRecord{}
-			streamBuf = bytes.NewBuffer(stream)
+			rr              = new(recordReader)
+			records         = []tlsRecord{}
+			streamBuf       = bytes.NewBuffer(stream)
+			currentSliceLen int
+			err             error
 		)
 		for streamBuf.Len() > 0 {
-			currentSliceLen, err := randInt(1, streamBuf.Len())
-			require.NoError(t, err)
+			if streamBuf.Len() == 1 {
+				currentSliceLen = 1
+			} else {
+				currentSliceLen, err = randInt(1, streamBuf.Len())
+				require.NoError(t, err)
+			}
 			currentSlice := streamBuf.Next(currentSliceLen)
 			records = append(records, rr.read(currentSlice)...)
 		}
@@ -83,8 +89,12 @@ func TestRecordReader(t *testing.T) {
 		for streamBuf.Len() > 0 {
 			currentLen := len(recordsBaseline[currentRecord])
 			nextStart := currentLen - posInHdr
-			posInHdr, err = randInt(1, recordHeaderLen-1)
-			require.NoError(t, err)
+			if recordHeaderLen-1 == 1 {
+				posInHdr = 1
+			} else {
+				posInHdr, err = randInt(1, recordHeaderLen-1)
+				require.NoError(t, err)
+			}
 			currentSlice := streamBuf.Next(nextStart + posInHdr)
 
 			records = append(records, rr.read(currentSlice)...)

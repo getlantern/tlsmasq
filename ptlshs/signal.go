@@ -130,7 +130,7 @@ func signalHMAC(s Secret) hash.Hash {
 	return hmac.New(sha256.New, s[:])
 }
 
-// Generates a random integer in [min, max) using crypto/rand.
+// Generates a random integer in [min, max) using crypto/rand. Panics if max-min <= 0.
 func randInt(min, max int) (int, error) {
 	delta, err := rand.Int(rand.Reader, big.NewInt(int64(max-min)))
 	if err != nil {
