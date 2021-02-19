@@ -3,10 +3,11 @@ package ptlshs
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"hash"
-	"math/rand"
+	"math/big"
 	"time"
 )
 
@@ -35,19 +36,26 @@ const (
 	// The server signal is made to look like the response. The maximum payload size for supported
 	// cipher suites is in the range of 1151 to 1187 bytes. We cap the server signal below this
 	// range to avoid complications from split records.
-	minSignalLenServer, maxSignalLenServer = 250, 1150
+	absMinSignalLenServer, absMaxSignalLenServer = 250, 1150
 
 	serverSignalLenSpread = 50
 )
 
 // Initialized in init. We narrow the range so that the server responses are somewhat consistent.
-var actualMinSignalLenServer int
+var minSignalLenServer, maxSignalLenServer int
 
 func init() {
-	// Choose a random number in the range to serve as the minimum for this runtime.
-	rand.Seed(time.Now().UnixNano())
-	randSpread := maxSignalLenServer - minSignalLenServer - serverSignalLenSpread
-	actualMinSignalLenServer = rand.Intn(randSpread) + minSignalLenServer
+	// Choose a random number in range to serve as the minimum for this runtime.
+	var (
+		err    error
+		absMin = absMinSignalLenServer
+		absMax = absMaxSignalLenServer - serverSignalLenSpread
+	)
+	minSignalLenServer, err = randInt(absMin, absMax)
+	if err != nil {
+		panic(fmt.Sprintf("failed to initialize random server signal length: %v", err))
+	}
+	maxSignalLenServer = minSignalLenServer + serverSignalLenSpread
 }
 
 var signalPrefix = []byte("handshake complete")
@@ -59,8 +67,12 @@ func newClientSignal(ttl time.Duration) (*clientSignal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
+	sLen, err := randInt(minSignalLenClient, maxSignalLenClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate random signal length: %w", err)
+	}
 
-	cs := make(clientSignal, rand.Intn(maxSignalLenClient-minSignalLenClient)+minSignalLenClient)
+	cs := make(clientSignal, sLen)
 	n := copy(cs[:], signalPrefix)
 	copy(cs[n:], nonce[:])
 	return &cs, nil
@@ -87,15 +99,19 @@ func (cs clientSignal) getNonce() nonce {
 type serverSignal []byte
 
 func newServerSignal(transcriptHMACSHA256 []byte) (*serverSignal, error) {
-	ss := make(serverSignal, rand.Intn(serverSignalLenSpread)+actualMinSignalLenServer)
+	sLen, err := randInt(minSignalLenServer, maxSignalLenServer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate random signal length: %w", err)
+	}
+	ss := make(serverSignal, sLen)
 	n := copy(ss[:], signalPrefix)
 	copy(ss[n:], transcriptHMACSHA256)
 	return &ss, nil
 }
 
 func parseServerSignal(b []byte) (*serverSignal, error) {
-	if len(b) < minSignalLenServer {
-		return nil, fmt.Errorf("expected %d bytes, received %d", minSignalLenServer, len(b))
+	if len(b) < absMinSignalLenServer {
+		return nil, fmt.Errorf("expected %d bytes, received %d", absMinSignalLenServer, len(b))
 	}
 	if !bytes.HasPrefix(b, signalPrefix) {
 		return nil, fmt.Errorf("missing signal prefix")
@@ -112,4 +128,13 @@ func (ss serverSignal) validMAC(mac []byte) bool {
 
 func signalHMAC(s Secret) hash.Hash {
 	return hmac.New(sha256.New, s[:])
+}
+
+// Generates a random integer in [min, max) using crypto/rand.
+func randInt(min, max int) (int, error) {
+	delta, err := rand.Int(rand.Reader, big.NewInt(int64(max-min)))
+	if err != nil {
+		return 0, err
+	}
+	return int(delta.Int64()) + min, nil
 }
