@@ -479,7 +479,6 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 	}
 
 	var (
-		// TODO: use errgroup.WithContext?
 		g          = new(errgroup.Group)
 		gWaitErr   = make(chan error, 1)
 		client     = netReadWriter{mitm(toClient, onClientRead, nil)}
