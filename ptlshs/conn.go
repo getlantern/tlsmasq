@@ -2,6 +2,7 @@ package ptlshs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"hash"
@@ -324,7 +325,19 @@ func (c *serverConn) Handshake() error {
 }
 
 func (c *serverConn) handshake() error {
-	origin, err := c.cfg.DialOrigin()
+	// Use a context to ensure this function exits if c is closed.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-c.closeOnce.done:
+			cancel()
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	origin, err := c.cfg.DialOrigin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to dial origin server: %w", err)
 	}
@@ -342,11 +355,11 @@ func (c *serverConn) handshake() error {
 	defer func() { transcriptDone = true }()
 
 	// Read and copy ClientHello.
-	b, err := readClientHello(c.Conn, listenerReadBufferSize)
+	b, err := readClientHello(ctx, c.Conn, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Client sent something other than ClientHello. Proxy everything to match origin behavior.
 		transcriptDone = true
-		proxyUntilClose(preconn.Wrap(c.Conn, b), origin)
+		proxyUntilClose(ctx, preconn.Wrap(c.Conn, b), origin)
 		return fmt.Errorf("did not receive ClientHello: %w", err)
 	}
 	if err != nil {
@@ -358,11 +371,11 @@ func (c *serverConn) handshake() error {
 	}
 
 	// Read, parse, and copy ServerHello.
-	b, c.state, err = readServerHello(origin, listenerReadBufferSize)
+	b, c.state, err = readServerHello(ctx, origin, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Origin sent something other than ServerHello. Proxy everything to match origin behavior.
 		transcriptDone = true
-		proxyUntilClose(c.Conn, preconn.Wrap(origin, b))
+		proxyUntilClose(ctx, c.Conn, preconn.Wrap(origin, b))
 		return fmt.Errorf("did not receive ServerHello: %w", err)
 	}
 	if err != nil {
@@ -379,7 +392,7 @@ func (c *serverConn) handshake() error {
 	}
 
 	// Wait until we've received the client's completion signal.
-	if err := c.watchForCompletion(listenerReadBufferSize, tlsState, origin); err != nil {
+	if err := c.watchForCompletion(ctx, listenerReadBufferSize, tlsState, origin); err != nil {
 		return fmt.Errorf("failed while watching for completion signal: %w", err)
 	}
 
@@ -401,12 +414,15 @@ func (c *serverConn) handshake() error {
 // Copies data between the client (c.Conn) and the origin server, watching client messages for the
 // completion signal. If the signal is received, the origin connection will be closed. If an error
 // is returned, then either the origin or the client connection was broken.
-func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.ConnectionState, toOrigin net.Conn) error {
+func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
+	tlsState *tlsutil.ConnectionState, originConn net.Conn) error {
 
 	// We will set up a bi-directional copy between the client and the origin, watching everything
 	// sent by the client. We attempt to decrypt every record we see from the client using the input
 	// state. If we see the signal, we close the connection with the origin. Otherwise, we continue
 	// to proxy.
+
+	toClient, toOrigin := newCancelConn(c.Conn), newCancelConn(originConn)
 
 	nonFatalError := func(err error) {
 		select {
@@ -463,34 +479,31 @@ func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.Connec
 	}
 
 	var (
+		// TODO: use errgroup.WithContext?
 		g          = new(errgroup.Group)
 		gWaitErr   = make(chan error, 1)
-		client     = netReadWriter{mitm(c.Conn, onClientRead, nil)}
+		client     = netReadWriter{mitm(toClient, onClientRead, nil)}
 		origin     = netReadWriter{toOrigin}
 		buf1, buf2 = make([]byte, bufferSize), make([]byte, bufferSize)
-		err        error
 	)
 	g.Go(func() error { _, err := io.CopyBuffer(client, origin, buf1); return err })
 	g.Go(func() error { _, err := io.CopyBuffer(origin, client, buf2); return err })
 	go func() { gWaitErr <- g.Wait() }()
 	select {
-	case err = <-gWaitErr:
-	case <-c.closeOnce.done:
-		// If the client and origin connections are not closed, we may leak the copy routines. The
-		// connections should be closed elsewhere, but it doesn't hurt to be sure.
-		c.Conn.Close()
-		toOrigin.Close()
-		// TODO: replace with net.ErrClosed upon update to Go 1.16.
-		err = errors.New("use of closed network connection")
-	}
-	switch {
-	case foundSignal:
-		return nil
-	case err != nil:
-		return err
-	default:
-		// If the copy routines returned before the signal, it means we hit EOF.
-		return io.EOF
+	case err := <-gWaitErr:
+		switch {
+		case foundSignal:
+			return nil
+		case err != nil:
+			return err
+		default:
+			// If the copy routines returned before the signal, it means we hit EOF.
+			return io.EOF
+		}
+	case <-ctx.Done():
+		toClient.cancelIO()
+		toOrigin.cancelIO()
+		return ctx.Err()
 	}
 }
 
@@ -531,23 +544,37 @@ func (c *serverConn) IV() [16]byte {
 //	- The bytes read could not possibly constitute a valid TLS ClientHello.
 //	- A non-temporary network error is encountered.
 // Whatever was read is always returned.
-func readClientHello(conn net.Conn, bufferSize int) ([]byte, error) {
-	buf := make([]byte, bufferSize)
-	read := new(bytes.Buffer)
-	for {
-		n, err := makeNetworkCall(conn.Read, buf)
-		if err != nil {
-			return read.Bytes(), networkError{err}
+func readClientHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte, error) {
+	var (
+		buf   = make([]byte, bufferSize)
+		read  = new(bytes.Buffer)
+		errC  = make(chan error, 1)
+		_conn = newCancelConn(conn)
+	)
+	readHello := func() error {
+		for {
+			n, err := makeNetworkCall(_conn.Read, buf)
+			if err != nil {
+				return networkError{err}
+			}
+			// Note: bytes.Buffer.Write does not return errors.
+			read.Write(buf[:n])
+			_, err = tlsutil.ValidateClientHello(read.Bytes())
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, io.EOF) {
+				return err
+			}
 		}
-		// Note: bytes.Buffer.Write does not return errors.
-		read.Write(buf[:n])
-		_, err = tlsutil.ValidateClientHello(read.Bytes())
-		if err == nil {
-			return read.Bytes(), nil
-		}
-		if !errors.Is(err, io.EOF) {
-			return read.Bytes(), err
-		}
+	}
+	go func() { errC <- readHello() }()
+	select {
+	case err := <-errC:
+		return read.Bytes(), err
+	case <-ctx.Done():
+		_conn.cancelIO()
+		return read.Bytes(), ctx.Err()
 	}
 }
 
@@ -557,28 +584,47 @@ func readClientHello(conn net.Conn, bufferSize int) ([]byte, error) {
 //	- A non-temporary network error is encountered.
 // Whatever was read is always returned. When a valid ServerHello is read, it is parsed and used to
 // create a connection state.
-func readServerHello(conn net.Conn, bufferSize int) ([]byte, *connState, error) {
-	buf := make([]byte, bufferSize)
-	read := new(bytes.Buffer)
-	for {
-		n, err := makeNetworkCall(conn.Read, buf)
-		if err != nil {
-			return read.Bytes(), nil, networkError{err}
-		}
-		// Note: bytes.Buffer.Write does not return errors.
-		read.Write(buf[:n])
-		serverHello, err := tlsutil.ParseServerHello(read.Bytes())
-		if err == nil {
-			version, suite := serverHello.Version, serverHello.Suite
-			seq, iv, err := deriveSeqAndIV(serverHello.Random)
+func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte, *connState, error) {
+	type result struct {
+		cs  *connState
+		err error
+	}
+
+	var (
+		buf     = make([]byte, bufferSize)
+		read    = new(bytes.Buffer)
+		resultC = make(chan result, 1)
+		_conn   = newCancelConn(conn)
+	)
+	readHello := func() result {
+		for {
+			n, err := makeNetworkCall(_conn.Read, buf)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to derive sequence and IV: %w", err)
+				return result{nil, networkError{err}}
 			}
-			return read.Bytes(), &connState{version, suite, seq, iv, sync.Mutex{}}, nil
+			// Note: bytes.Buffer.Write does not return errors.
+			read.Write(buf[:n])
+			serverHello, err := tlsutil.ParseServerHello(read.Bytes())
+			if err == nil {
+				version, suite := serverHello.Version, serverHello.Suite
+				seq, iv, err := deriveSeqAndIV(serverHello.Random)
+				if err != nil {
+					return result{nil, fmt.Errorf("failed to derive sequence and IV: %w", err)}
+				}
+				return result{&connState{version, suite, seq, iv, sync.Mutex{}}, nil}
+			}
+			if !errors.Is(err, io.EOF) {
+				return result{nil, err}
+			}
 		}
-		if !errors.Is(err, io.EOF) {
-			return read.Bytes(), nil, err
-		}
+	}
+	go func() { resultC <- readHello() }()
+	select {
+	case r := <-resultC:
+		return read.Bytes(), r.cs, r.err
+	case <-ctx.Done():
+		_conn.cancelIO()
+		return read.Bytes(), nil, ctx.Err()
 	}
 }
 
@@ -674,12 +720,18 @@ func (err networkError) Unwrap() error {
 	return err.cause
 }
 
-func proxyUntilClose(a, b net.Conn) {
-	wg := new(sync.WaitGroup)
-	wg.Add(2)
-	go func() { io.Copy(a, b); wg.Done() }()
-	go func() { io.Copy(b, a); wg.Done() }()
-	wg.Wait()
+// Proxies until an error is returned on either connection, at which point both are closed. If the
+// context completes, both connections will be closed and this function will return.
+func proxyUntilClose(ctx context.Context, a, b net.Conn) {
+	copyDone := make(chan struct{}, 2)
+	go func() { io.Copy(a, b); copyDone <- struct{}{} }()
+	go func() { io.Copy(b, a); copyDone <- struct{}{} }()
+	select {
+	case <-copyDone:
+	case <-ctx.Done():
+	}
+	a.Close()
+	b.Close()
 }
 
 type once struct {

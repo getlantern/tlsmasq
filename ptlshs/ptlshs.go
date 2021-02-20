@@ -33,7 +33,9 @@ type HandshakeResult struct {
 	Version, CipherSuite uint16
 }
 
-// Handshaker executes a TLS handshake using the input connection as a transport.
+// Handshaker executes a TLS handshake using the input connection as a transport. Handshakers must
+// unblock and return an error if the connection is closed. Usually this does not require special
+// handling as the connection's I/O functions should do the same.
 type Handshaker interface {
 	Handshake(net.Conn) (*HandshakeResult, error)
 }
@@ -128,7 +130,7 @@ func DialTimeout(network, address string, cfg DialerConfig, timeout time.Duratio
 // ListenerConfig specifies configuration for listening.
 type ListenerConfig struct {
 	// DialOrigin is used to create TCP connections to the origin server. Must not be nil.
-	DialOrigin func() (net.Conn, error)
+	DialOrigin func(context.Context) (net.Conn, error)
 
 	// A Secret pre-shared between listeners and dialers.
 	Secret Secret

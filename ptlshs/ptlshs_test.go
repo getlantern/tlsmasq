@@ -2,6 +2,7 @@ package ptlshs
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"io"
@@ -29,7 +30,9 @@ func TestListenAndDial(t *testing.T) {
 
 	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+	dialOrigin := func(_ context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
 
 	wg.Add(1)
 	go func() {
@@ -95,7 +98,9 @@ func TestSessionResumption(t *testing.T) {
 
 	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+	dialOrigin := func(_ context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
 
 	wg.Add(1)
 	go func() {
@@ -164,7 +169,9 @@ func TestSignalReplay(t *testing.T) {
 
 	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+	dialOrigin := func(_ context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
 
 	go func() {
 		for i := 0; i < 2; i++ {
@@ -308,7 +315,9 @@ func TestPostHandshakeData(t *testing.T) {
 
 	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+	dialOrigin := func(_ context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
 
 	wg.Add(1)
 	go func() {
@@ -398,7 +407,9 @@ func TestPostHandshakeInjection(t *testing.T) {
 
 	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+	dialOrigin := func(_ context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
 
 	wg.Add(1)
 	go func() {
@@ -535,7 +546,9 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 	origin, err := listen()
 	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+	dialOrigin := func(context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
 
 	wg.Add(1)
 	go func() {

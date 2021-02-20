@@ -1,6 +1,7 @@
 package tlsmasq
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"net"
@@ -51,7 +52,7 @@ func TestHandshake(t *testing.T) {
 	serverConn := Server(serverTransport, ListenerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
-			DialOrigin: func() (net.Conn, error) {
+			DialOrigin: func(_ context.Context) (net.Conn, error) {
 				return serverToOrigin, nil
 			},
 			Secret: secret,

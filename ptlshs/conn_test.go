@@ -1,6 +1,7 @@
 package ptlshs
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"net"
@@ -41,8 +42,9 @@ func TestHandshake(t *testing.T) {
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
 	serverConn := Server(serverTransport, ListenerConfig{
-		func() (net.Conn, error) { return serverToOrigin, nil }, secret, 0, make(chan error)},
-	)
+		func(_ context.Context) (net.Conn, error) { return serverToOrigin, nil },
+		secret, 0, make(chan error),
+	})
 	defer serverConn.Close()
 	defer clientConn.Close()
 

@@ -1,6 +1,7 @@
 package tlsmasq
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"io"
@@ -26,7 +27,9 @@ func TestListenAndDial(t *testing.T) {
 
 	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+	dialOrigin := func(_ context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
 
 	wg.Add(1)
 	go func() {

@@ -1,6 +1,7 @@
 package ptlshs
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"fmt"
@@ -31,7 +32,7 @@ func Example() {
 	}
 
 	// Start a TCP server which begins with our proxied TLS handshake.
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", tlsServerAddr) }
+	dialOrigin := func(_ context.Context) (net.Conn, error) { return net.Dial("tcp", tlsServerAddr) }
 	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: *secret}
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	defer l.Close()
