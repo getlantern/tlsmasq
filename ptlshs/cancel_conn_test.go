@@ -34,7 +34,7 @@ func TestCancelConn(t *testing.T) {
 	require.NoError(t, rx.cancelIO())
 
 	for i := 0; i < parallelism; i++ {
-		require.True(t, errors.Is(<-errs, errorCancelledIO))
+		require.True(t, errors.Is(<-errs, errCancelledIO))
 	}
 
 	// Connection should still be usable.

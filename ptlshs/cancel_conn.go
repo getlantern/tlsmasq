@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var errorCancelledIO = errors.New("cancelled")
+var errCancelledIO = errors.New("cancelled")
 
 // Wrap an existing net.Conn with newCancelConn and use normally. Unblock pending Reads or Writes
 // using cancelIO(). There are no side-effects other than performance penalties due to locking.
@@ -25,6 +25,14 @@ func newCancelConn(conn net.Conn) *cancelConn {
 	cc := &cancelConn{Conn: conn}
 	cc.cancelComplete = sync.NewCond(&cc.Mutex)
 	return cc
+}
+
+// When this function returns, conn.Lock will be held and any pending cancels will be complete.
+func (conn *cancelConn) waitForPendingCancel() {
+	conn.Lock()
+	for conn.cancelErrors != nil {
+		conn.cancelComplete.Wait()
+	}
 }
 
 func (conn *cancelConn) SetReadDeadline(t time.Time) error {
@@ -57,44 +65,28 @@ func (conn *cancelConn) SetDeadline(t time.Time) error {
 	return err
 }
 
-func (conn *cancelConn) Read(b []byte) (n int, err error) {
+func (conn *cancelConn) doIO(b []byte, io func([]byte) (int, error)) (n int, err error) {
 	conn.waitForPendingCancel()
 	conn.pendingIO++
 	conn.Unlock()
 
-	n, err = conn.Conn.Read(b)
+	n, err = io(b)
 	conn.Lock()
 	if conn.cancelErrors != nil {
 		conn.cancelErrors <- err
-		err = errorCancelledIO
+		err = errCancelledIO
 	}
 	conn.pendingIO--
 	conn.Unlock()
 	return
+}
+
+func (conn *cancelConn) Read(b []byte) (n int, err error) {
+	return conn.doIO(b, conn.Conn.Read)
 }
 
 func (conn *cancelConn) Write(b []byte) (n int, err error) {
-	conn.waitForPendingCancel()
-	conn.pendingIO++
-	conn.Unlock()
-
-	n, err = conn.Conn.Write(b)
-	conn.Lock()
-	if conn.cancelErrors != nil {
-		conn.cancelErrors <- err
-		err = errorCancelledIO
-	}
-	conn.pendingIO--
-	conn.Unlock()
-	return
-}
-
-// When this function returns, conn.Lock will be held and any pending cancels will be complete.
-func (conn *cancelConn) waitForPendingCancel() {
-	conn.Lock()
-	for conn.cancelErrors != nil {
-		conn.cancelComplete.Wait()
-	}
+	return conn.doIO(b, conn.Conn.Write)
 }
 
 // cancelIO cancels all pending I/O operations. Any blocked callers of Read or Write will receive
