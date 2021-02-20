@@ -9,13 +9,15 @@ import (
 
 var errorCancelledIO = errors.New("cancelled")
 
+// Wrap an existing net.Conn with newCancelConn and use normally. Unblock pending Reads or Writes
+// using cancelIO(). There are no side-effects other than performance penalties due to locking.
 type cancelConn struct {
 	net.Conn
 	sync.Mutex
 
 	rDeadline, wDeadline time.Time
 	pendingIO            int
-	cancelErrors         chan error
+	cancelErrors         chan error // non-nil iff a cancel is ongoing
 	cancelComplete       *sync.Cond
 }
 
@@ -125,13 +127,4 @@ func (conn *cancelConn) cancelIO() error {
 		}
 	}
 	return nil
-}
-
-func (conn *cancelConn) copyDeadlines(other *cancelConn) error {
-	other.Lock()
-	defer other.Unlock()
-	if err := conn.SetReadDeadline(other.rDeadline); err != nil {
-		return err
-	}
-	return conn.SetWriteDeadline(other.wDeadline)
 }
