@@ -719,18 +719,18 @@ func (err networkError) Unwrap() error {
 	return err.cause
 }
 
-// Proxies until an error is returned on either connection, at which point both are closed. If the
-// context completes, both connections will be closed and this function will return.
+// Proxies until an error is returned on either connection or the context completes.
 func proxyUntilClose(ctx context.Context, a, b net.Conn) {
+	_a, _b := newCancelConn(a), newCancelConn(b)
 	copyDone := make(chan struct{}, 2)
-	go func() { io.Copy(a, b); copyDone <- struct{}{} }()
-	go func() { io.Copy(b, a); copyDone <- struct{}{} }()
+	go func() { io.Copy(_a, _b); copyDone <- struct{}{} }()
+	go func() { io.Copy(_b, _a); copyDone <- struct{}{} }()
 	select {
 	case <-copyDone:
 	case <-ctx.Done():
 	}
-	a.Close()
-	b.Close()
+	_a.cancelIO()
+	_b.cancelIO()
 }
 
 type once struct {
