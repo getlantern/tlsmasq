@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"io"
-	mathrand "math/rand"
 	"net"
 	"sync"
 	"testing"
@@ -373,6 +372,8 @@ func TestPostHandshakeInjection(t *testing.T) {
 	// different transcripts and the client should notice this when it checks the MAC in the
 	// server's completion signal.
 
+	// Not the theoretical maximum, but the maximum allowed by all ciphers supported by tlsutil.
+	const maxTLSPayloadSize = 1150
 	var (
 		wg = new(sync.WaitGroup)
 
@@ -471,7 +472,7 @@ func TestPostHandshakeInjection(t *testing.T) {
 			// "record"). This is acceptable as far as we're concerned, but makes testing harder.
 			// So we send the garbage data in a record encrypted with a different set of parameters.
 			// The client will still get the garbage data, but not hang.
-			_, err = tlsutil.WriteRecord(_server, randomData(t, 1024+mathrand.Intn(31*1024)), injectorState)
+			_, err = tlsutil.WriteRecord(_server, randomData(t, maxTLSPayloadSize), injectorState)
 			require.NoError(t, err)
 		}
 		return nil
