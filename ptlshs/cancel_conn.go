@@ -7,7 +7,11 @@ import (
 	"time"
 )
 
-var errCancelledIO = errors.New("cancelled")
+type cancelledIOError struct{}
+
+func (err cancelledIOError) Error() string   { return "cancelled" }
+func (err cancelledIOError) Timeout() bool   { return false }
+func (err cancelledIOError) Temporary() bool { return true }
 
 // Wrap an existing net.Conn with newCancelConn and use normally. Unblock pending Reads or Writes
 // using cancelIO(). There are no side-effects other than performance penalties due to locking.
@@ -74,7 +78,7 @@ func (conn *cancelConn) doIO(b []byte, io func([]byte) (int, error)) (n int, err
 	conn.Lock()
 	if conn.cancelErrors != nil {
 		conn.cancelErrors <- err
-		err = errCancelledIO
+		err = cancelledIOError{}
 	}
 	conn.pendingIO--
 	conn.Unlock()
