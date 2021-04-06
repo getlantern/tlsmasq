@@ -60,6 +60,7 @@ func TestHandshake(t *testing.T) {
 }
 
 // Calling Close on a net.Conn should unblock any Read or Write operations.
+// TODO: maybe a server version?
 func TestCloseUnblock(t *testing.T) {
 	t.Parallel()
 
@@ -99,8 +100,10 @@ func TestCloseUnblock(t *testing.T) {
 
 	require.NoError(t, <-serverErrC)
 	// Introduce a small delay to ensure the client begins waiting for the completion signal.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(time.Second)
+	// time.Sleep(50 * time.Millisecond) // TODO: how does this impact the time for -count 1000?
 	clientConn.Close()
+	clientTransport.Close()
 
 	// Calling Close on clientConn should have caused Read to unblock and return an error.
 	require.Error(t, <-readErrC)

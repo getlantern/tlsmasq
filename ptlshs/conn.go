@@ -85,14 +85,13 @@ type clientConn struct {
 	state        *connState
 	handshakeErr error
 
-	shakeOnce         sync.Once
-	handshakeComplete chan struct{}
+	shakeOnce, closeOnce *once
 }
 
 // Client initializes a client-side connection.
 func Client(toServer net.Conn, cfg DialerConfig) Conn {
 	cfg = cfg.withDefaults()
-	return &clientConn{toServer, cfg, nil, nil, sync.Once{}, make(chan struct{})}
+	return &clientConn{toServer, cfg, nil, nil, newOnce(), newOnce()}
 }
 
 func (c *clientConn) Read(b []byte) (n int, err error) {
@@ -115,11 +114,9 @@ func (c *clientConn) Write(b []byte) (n int, err error) {
 // closes the connection on its end. As a result, this function should be treated as one which may
 // be long-running or never return.
 func (c *clientConn) Handshake() error {
-	c.shakeOnce.Do(func() {
-		c.handshakeErr = c.handshake()
-		close(c.handshakeComplete)
+	return c.shakeOnce.do(func() error {
+		return c.handshake()
 	})
-	return c.handshakeErr
 }
 
 func (c *clientConn) handshake() error {
@@ -209,6 +206,9 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, trans
 			unprocessedBuf.prepend(unprocessed)
 		}
 		if err != nil {
+			if c.closeOnce.isDone() {
+				return err
+			}
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return io.ErrUnexpectedEOF
 			}
@@ -232,7 +232,7 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, trans
 }
 
 func (c *clientConn) TLSVersion() uint16 {
-	<-c.handshakeComplete
+	c.shakeOnce.wait()
 	if c.state == nil {
 		return 0
 	}
@@ -240,7 +240,7 @@ func (c *clientConn) TLSVersion() uint16 {
 }
 
 func (c *clientConn) CipherSuite() uint16 {
-	<-c.handshakeComplete
+	c.shakeOnce.wait()
 	if c.state == nil {
 		return 0
 	}
@@ -248,7 +248,7 @@ func (c *clientConn) CipherSuite() uint16 {
 }
 
 func (c *clientConn) NextSeq() [8]byte {
-	<-c.handshakeComplete
+	c.shakeOnce.wait()
 	if c.state == nil {
 		return [8]byte{}
 	}
@@ -256,11 +256,17 @@ func (c *clientConn) NextSeq() [8]byte {
 }
 
 func (c *clientConn) IV() [16]byte {
-	<-c.handshakeComplete
+	c.shakeOnce.wait()
 	if c.state == nil {
 		return [16]byte{}
 	}
 	return c.state.iv
+}
+
+func (c *clientConn) Close() error {
+	return c.closeOnce.do(func() error {
+		return c.Conn.Close()
+	})
 }
 
 type serverConn struct {
@@ -746,6 +752,15 @@ func newOnce() *once {
 
 func (cond *once) wait() {
 	<-cond.done
+}
+
+func (cond *once) isDone() bool {
+	select {
+	case <-cond.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func (cond *once) do(f func() error) error {
