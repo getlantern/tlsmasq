@@ -1,7 +1,6 @@
 package ptlshs
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/tls"
 	"io"
@@ -76,8 +75,6 @@ func TestIssue17(t *testing.T) {
 		_, err := rand.Read(b)
 		require.NoError(t, err)
 	}
-	writerState1, err := tlsutil.NewConnectionState(version, suite, secret1, iv1, seq1)
-	require.NoError(t, err)
 	writerState2, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
 	require.NoError(t, err)
 	readerState2, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
@@ -87,13 +84,7 @@ func TestIssue17(t *testing.T) {
 	require.NoError(t, err)
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientTransportCopy := new(bytes.Buffer)
-	clientTransportW := io.MultiWriter(clientTransport, clientTransportCopy)
-
-	_, err = tlsutil.WriteRecord(clientTransportW, []byte("pre-signal record"), writerState1)
-	require.NoError(t, err)
-	firstRecordLen := clientTransportCopy.Len()
-	_, err = tlsutil.WriteRecord(clientTransportW, *sig, writerState2)
+	_, err = tlsutil.WriteRecord(clientTransport, *sig, writerState2)
 	require.NoError(t, err)
 
 	toOrigin, originReader := testutil.BufferedPipe()
@@ -103,5 +94,5 @@ func TestIssue17(t *testing.T) {
 		Conn:       serverTransport,
 		nonceCache: newNonceCache(time.Hour),
 	}
-	require.NoError(t, conn.watchForCompletion(firstRecordLen-1, readerState2, toOrigin))
+	require.NoError(t, conn.watchForCompletion(len(*sig)-1, readerState2, toOrigin))
 }
