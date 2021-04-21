@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"io"
-	"io/ioutil"
 	"net"
 	"testing"
 	"time"
@@ -90,12 +89,41 @@ func TestIssue17(t *testing.T) {
 	_, err = tlsutil.WriteRecord(clientTransport, *sig, writerState)
 	require.NoError(t, err)
 
-	toOrigin, originReader := testutil.BufferedPipe()
-	go io.Copy(ioutil.Discard, originReader)
-
 	conn := &serverConn{
 		Conn:       serverTransport,
 		nonceCache: newNonceCache(time.Hour),
 	}
-	require.NoError(t, conn.watchForCompletion(len(*sig)-1, readerState, toOrigin))
+	require.NoError(t, conn.watchForCompletion(len(*sig)-1, readerState, newDummyOrigin()))
 }
+
+// Used by TestIssue17
+type dummyOrigin struct {
+	closed chan struct{}
+}
+
+func newDummyOrigin() *dummyOrigin { return &dummyOrigin{make(chan struct{})} }
+
+func (do *dummyOrigin) Read(_ []byte) (int, error) {
+	<-do.closed
+	return 0, io.EOF
+}
+
+func (do *dummyOrigin) Write(b []byte) (int, error) {
+	select {
+	case <-do.closed:
+		return 0, io.ErrClosedPipe
+	default:
+		return len(b), nil
+	}
+}
+
+func (do *dummyOrigin) Close() error {
+	close(do.closed)
+	return nil
+}
+
+func (do *dummyOrigin) LocalAddr() net.Addr                { return nil }
+func (do *dummyOrigin) RemoteAddr() net.Addr               { return nil }
+func (do *dummyOrigin) SetDeadline(_ time.Time) error      { return nil }
+func (do *dummyOrigin) SetReadDeadline(_ time.Time) error  { return nil }
+func (do *dummyOrigin) SetWriteDeadline(_ time.Time) error { return nil }
