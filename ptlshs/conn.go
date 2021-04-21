@@ -452,14 +452,17 @@ func (c *serverConn) watchForCompletion(bufferSize int, tlsState *tlsutil.Connec
 
 	rr := new(recordReader)
 	onClientRead := func(b []byte) error {
-		preSignalBytes := 0
-		for _, r := range rr.read(b) {
-			if isSignal(r) {
-				preSignal, postSignal := b[:preSignalBytes], b[preSignalBytes+len(r):]
-				signalFound(preSignal, postSignal)
+		// There may be a partial record buffered in rr.
+		currentRecordStart := -1 * rr.currentlyBuffered()
+		for _, record := range rr.read(b) {
+			if isSignal(record) {
+				// The signal may have started before b, so we adjust to 0 if necessary.
+				signalStart := max(0, currentRecordStart)
+				signalEnd := currentRecordStart + len(record)
+				signalFound(b[:signalStart], b[signalEnd:])
 				return nil
 			}
-			preSignalBytes += len(r)
+			currentRecordStart += len(record)
 		}
 		return nil
 	}
