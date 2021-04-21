@@ -60,6 +60,9 @@ func TestHandshake(t *testing.T) {
 	<-done
 }
 
+// Tests the case in which the copy buffer used to read from the client connection is not large
+// enough to hold the entire client signal. This was an oversight which created bugs in production.
+//
 // https://github.com/getlantern/tlsmasq/issues/17
 func TestIssue17(t *testing.T) {
 	t.Parallel()
@@ -75,16 +78,16 @@ func TestIssue17(t *testing.T) {
 		_, err := rand.Read(b)
 		require.NoError(t, err)
 	}
-	writerState2, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
+	writerState, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
 	require.NoError(t, err)
-	readerState2, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
+	readerState, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
 	require.NoError(t, err)
 
 	sig, err := newClientSignal(time.Hour)
 	require.NoError(t, err)
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	_, err = tlsutil.WriteRecord(clientTransport, *sig, writerState2)
+	_, err = tlsutil.WriteRecord(clientTransport, *sig, writerState)
 	require.NoError(t, err)
 
 	toOrigin, originReader := testutil.BufferedPipe()
@@ -94,5 +97,5 @@ func TestIssue17(t *testing.T) {
 		Conn:       serverTransport,
 		nonceCache: newNonceCache(time.Hour),
 	}
-	require.NoError(t, conn.watchForCompletion(len(*sig)-1, readerState2, toOrigin))
+	require.NoError(t, conn.watchForCompletion(len(*sig)-1, readerState, toOrigin))
 }
