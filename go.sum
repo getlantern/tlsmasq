@@ -4,6 +4,8 @@ github.com/getlantern/preconn v0.0.0-20210115195610-7b15d0535d80 h1:ofQvRfKpZF2E
 github.com/getlantern/preconn v0.0.0-20210115195610-7b15d0535d80/go.mod h1:FvIxQD61iYA42UjaJyzGl9DNne8jbowbgicdeNk/7kE=
 github.com/getlantern/tlsutil v0.4.0 h1:wvSKWfxSKFVpP3GgSq0wpLl+gFiiq8pDWgpuTxV3ZJY=
 github.com/getlantern/tlsutil v0.4.0/go.mod h1:8v4sW+apnxSkhURB6IUpQ9zuf1r0+i+CywWSZHxXpzw=
+github.com/getlantern/tlsutil v0.4.1 h1:NX5X4ufBmFYLTOqxWx8TOgiIO56TaI3GYGFBEwMiHQQ=
+github.com/getlantern/tlsutil v0.4.1/go.mod h1:8v4sW+apnxSkhURB6IUpQ9zuf1r0+i+CywWSZHxXpzw=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
