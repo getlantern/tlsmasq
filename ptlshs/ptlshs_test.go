@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
@@ -34,8 +36,10 @@ func TestListenAndDial(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		conn, err := origin.Accept()
-		require.NoError(t, err)
-		require.NoError(t, conn.(*tls.Conn).Handshake())
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.NoError(t, conn.(*tls.Conn).Handshake())
 	}()
 
 	dialerCfg := DialerConfig{
@@ -54,16 +58,22 @@ func TestListenAndDial(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		conn, err := l.Accept()
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		defer conn.Close()
 
 		b := make([]byte, len(clientMsg))
 		n, err := conn.Read(b)
-		require.NoError(t, err)
-		require.Equal(t, clientMsg, string(b[:n]))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.Equal(t, clientMsg, string(b[:n])) {
+			return
+		}
 
 		_, err = conn.Write([]byte(serverMsg))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}()
 
 	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
@@ -101,8 +111,12 @@ func TestSessionResumption(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 2; i++ {
 			conn, err := origin.Accept()
-			require.NoError(t, err)
-			require.NoError(t, conn.(*tls.Conn).Handshake())
+			if !assert.NoError(t, err) {
+				return
+			}
+			if !assert.NoError(t, conn.(*tls.Conn).Handshake()) {
+				return
+			}
 		}
 	}()
 
@@ -125,10 +139,14 @@ func TestSessionResumption(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 2; i++ {
 			conn, err := l.Accept()
-			require.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 			defer conn.Close()
 
-			require.NoError(t, conn.(Conn).Handshake())
+			if !assert.NoError(t, conn.(Conn).Handshake()) {
+				return
+			}
 		}
 	}()
 
@@ -168,12 +186,18 @@ func TestSignalReplay(t *testing.T) {
 	go func() {
 		for i := 0; i < 2; i++ {
 			conn, err := origin.Accept()
-			require.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 
 			go func(c net.Conn) {
-				require.NoError(t, c.(*tls.Conn).Handshake())
+				if !assert.NoError(t, c.(*tls.Conn).Handshake()) {
+					return
+				}
 				_, err = c.Write([]byte(originMsg))
-				require.NoError(t, err)
+				if !assert.NoError(t, err) {
+					return
+				}
 			}(conn)
 		}
 	}()
@@ -194,7 +218,9 @@ func TestSignalReplay(t *testing.T) {
 		}
 		var err error
 		serverHello, err = tlsutil.ParseServerHello(b)
-		require.NoError(t, err)
+		if err != nil {
+			return fmt.Errorf("failure parsing server hello in onServerWrite: %w", err)
+		}
 		return nil
 	}
 	onServerRead := func(b []byte) error {
@@ -205,11 +231,15 @@ func TestSignalReplay(t *testing.T) {
 		}
 
 		seq, iv, err := deriveSeqAndIV(serverHello.Random)
-		require.NoError(t, err)
+		if err != nil {
+			return fmt.Errorf("failed to dervice seq and IV in onServerRead: %w", err)
+		}
 
 		connState, err := tlsutil.NewConnectionState(
 			serverHello.Version, serverHello.Suite, secret, iv, seq)
-		require.NoError(t, err)
+		if err != nil {
+			return fmt.Errorf("failed to create new connection state in onServerRead: %w", err)
+		}
 
 		r := bytes.NewReader(b)
 		unprocessedBuf := new(bufferList)
@@ -243,7 +273,9 @@ func TestSignalReplay(t *testing.T) {
 	go func() {
 		for i := 0; i < 2; i++ {
 			conn, err := l.Accept()
-			require.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 			go func() {
 				// Try to write, but don't check for write errors. This message will only make it to
 				// the client if our replay detection is broken. We would see it in a check below.
@@ -306,11 +338,15 @@ func TestPostHandshakeData(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		conn, err := origin.Accept()
-		require.NoError(t, err)
-		require.NoError(t, conn.(*tls.Conn).Handshake())
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NoError(t, conn.(*tls.Conn).Handshake()) {
+			return
+		}
 		// Immediately send some data.
 		_, err = conn.Write([]byte("some nonsense from the origin"))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}()
 
 	dialerCfg := DialerConfig{
@@ -332,16 +368,22 @@ func TestPostHandshakeData(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		conn, err := l.Accept()
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		defer conn.Close()
 
 		b := make([]byte, len(clientMsg))
 		n, err := conn.Read(b)
-		require.NoError(t, err)
-		require.Equal(t, clientMsg, string(b[:n]))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.Equal(t, clientMsg, string(b[:n])) {
+			return
+		}
 
 		_, err = conn.Write([]byte(serverMsg))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}()
 
 	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
@@ -398,8 +440,10 @@ func TestPostHandshakeInjection(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		conn, err := origin.Accept()
-		require.NoError(t, err)
-		require.NoError(t, conn.(*tls.Conn).Handshake())
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.NoError(t, conn.(*tls.Conn).Handshake())
 	}()
 
 	dialerCfg := DialerConfig{
@@ -428,7 +472,9 @@ func TestPostHandshakeInjection(t *testing.T) {
 		}
 		var err error
 		serverHello, err = tlsutil.ParseServerHello(b)
-		require.NoError(t, err)
+		if err != nil {
+			return fmt.Errorf("failure parsing server hello in onServerWrite: %w", err)
+		}
 		return nil
 	}
 	onServerRead := func(b []byte) error {
@@ -439,11 +485,15 @@ func TestPostHandshakeInjection(t *testing.T) {
 		}
 
 		seq, iv, err := deriveSeqAndIV(serverHello.Random)
-		require.NoError(t, err)
+		if err != nil {
+			return fmt.Errorf("failed to dervice seq and IV in onServerRead: %w", err)
+		}
 
 		connState, err := tlsutil.NewConnectionState(
 			serverHello.Version, serverHello.Suite, secret, iv, seq)
-		require.NoError(t, err)
+		if err != nil {
+			return fmt.Errorf("failed to create new connection state in onServerRead: %w", err)
+		}
 
 		r := bytes.NewReader(b)
 		totalUnprocessed := r.Len() + serverReadBuf.len()
@@ -473,7 +523,9 @@ func TestPostHandshakeInjection(t *testing.T) {
 			// So we send the garbage data in a record encrypted with a different set of parameters.
 			// The client will still get the garbage data, but not hang.
 			_, err = tlsutil.WriteRecord(_server, randomData(t, maxTLSPayloadSize), injectorState)
-			require.NoError(t, err)
+			if err != nil {
+				return fmt.Errorf("failed to write record in onServerRead: %w", err)
+			}
 		}
 		return nil
 	}
@@ -536,18 +588,24 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 		defer wg.Done()
 
 		conn, err := origin.Accept()
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		if !clientCloses {
 			defer conn.Close()
 		}
 
 		b := make([]byte, len(clientMsg))
 		n, err := conn.Read(b)
-		require.NoError(t, err)
-		require.Equal(t, clientMsg, string(b[:n]))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.Equal(t, clientMsg, string(b[:n])) {
+			return
+		}
 
 		_, err = conn.Write([]byte(serverMsg))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}()
 
 	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
@@ -560,7 +618,9 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 	wg.Add(1)
 	go func() {
 		conn, err := l.Accept()
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		conn.(Conn).Handshake()
 		wg.Done()
 	}()

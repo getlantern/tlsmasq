@@ -10,6 +10,7 @@ import (
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,14 +50,10 @@ func TestHandshake(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		require.NoError(t, serverConn.Handshake())
-	}()
-
-	require.NoError(t, clientConn.Handshake())
-	<-done
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- serverConn.Handshake() }()
+	assert.NoError(t, clientConn.Handshake())
+	assert.NoError(t, <-serverErr)
 }
 
 // Tests the case in which the copy buffer used to read from the client connection is not large

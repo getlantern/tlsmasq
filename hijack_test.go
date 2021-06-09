@@ -9,6 +9,7 @@ import (
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsmasq/ptlshs"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +39,7 @@ func TestHijack(t *testing.T) {
 
 	serverToOrigin, originToServer := testutil.BufferedPipe()
 	proxiedConn := tls.Server(originToServer, tlsCfg)
-	go func() { require.NoError(t, proxiedConn.Handshake()) }()
+	go func() { assert.NoError(t, proxiedConn.Handshake()) }()
 	defer serverToOrigin.Close()
 	defer originToServer.Close()
 
@@ -61,15 +62,21 @@ func TestHijack(t *testing.T) {
 		defer close(done)
 
 		_, err := hijack(serverConn, tlsCfg, secret, false)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		b := make([]byte, len(clientMsg))
 		n, err := serverConn.Read(b)
-		require.NoError(t, err)
-		require.Equal(t, clientMsg, string(b[:n]))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.Equal(t, clientMsg, string(b[:n])) {
+			return
+		}
 
 		_, err = serverConn.Write([]byte(serverMsg))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}()
 
 	_, err = hijack(clientConn, tlsCfg, secret, true)

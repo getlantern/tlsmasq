@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/getlantern/tlsmasq/ptlshs"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,8 +34,10 @@ func TestListenAndDial(t *testing.T) {
 		defer wg.Done()
 
 		conn, err := origin.Accept()
-		require.NoError(t, err)
-		require.NoError(t, conn.(*tls.Conn).Handshake())
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.NoError(t, conn.(*tls.Conn).Handshake())
 	}()
 
 	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
@@ -63,16 +66,22 @@ func TestListenAndDial(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		conn, err := l.Accept()
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		defer conn.Close()
 
 		b := make([]byte, len(clientMsg))
 		n, err := conn.Read(b)
-		require.NoError(t, err)
-		require.Equal(t, clientMsg, string(b[:n]))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.Equal(t, clientMsg, string(b[:n])) {
+			return
+		}
 
 		_, err = conn.Write([]byte(serverMsg))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}()
 
 	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
