@@ -40,7 +40,7 @@ func TestHijack(t *testing.T) {
 
 	serverToOrigin, originToServer := testutil.BufferedPipe()
 	proxiedConn := tls.Server(originToServer, tlsCfg)
-	proxiedHSErr := make(chan error, 1) // TODO: check
+	proxiedHSErr := make(chan error, 1)
 	go func() { proxiedHSErr <- proxiedConn.Handshake() }()
 	defer serverToOrigin.Close()
 	defer originToServer.Close()

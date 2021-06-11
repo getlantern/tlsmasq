@@ -673,7 +673,9 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 			if err != nil {
 				return fmt.Errorf("accept error: %w", err)
 			}
-			if !clientCloses { // TODO: maybe else t.Cleanup?
+			if clientCloses {
+				t.Cleanup(func() { conn.Close() })
+			} else {
 				defer conn.Close()
 			}
 
@@ -716,8 +718,10 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 		if err != nil {
 			return "", fmt.Errorf("dial error: %w", err)
 		}
-		if clientCloses { // TODO: maybe else t.Cleanup?
+		if clientCloses {
 			defer conn.Close()
+		} else {
+			t.Cleanup(func() { conn.Close() })
 		}
 
 		if _, err := conn.Write([]byte(clientMsg)); err != nil {
