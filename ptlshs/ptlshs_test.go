@@ -698,14 +698,15 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 	// We expect the Handshake function to run for the duration of the test as it is serving as a
 	// proxy to the origin.
+	logger := newSafeLogger(t)
 	go func() {
 		conn, err := l.Accept()
 		if err != nil {
-			t.Logf("listener accept error: %v", err)
+			logger.logf("listener accept error: %v", err)
 			return
 		}
 		if err := conn.(Conn).Handshake(); err != nil {
-			t.Logf("listener handshake error: %v", err)
+			logger.logf("listener handshake error: %v", err)
 			return
 		}
 	}()
@@ -769,12 +770,29 @@ func (h *resumptionCheckingHandshaker) Handshake(conn net.Conn) (*HandshakeResul
 	}, nil
 }
 
-func randomData(t *testing.T, len int) []byte {
-	t.Helper()
-	b := make([]byte, len)
-	_, err := rand.Read(b)
-	require.NoError(t, err)
-	return b
+type safeTestLogger struct {
+	sync.Mutex
+	testComplete bool
+	t            *testing.T
+}
+
+func newSafeLogger(t *testing.T) *safeTestLogger {
+	l := &safeTestLogger{t: t}
+	t.Cleanup(func() {
+		l.Lock()
+		l.testComplete = true
+		l.Unlock()
+	})
+	return l
+}
+
+func (l *safeTestLogger) logf(format string, a ...interface{}) {
+	l.Lock()
+	defer l.Unlock()
+	if l.testComplete {
+		return
+	}
+	l.t.Logf(format, a...)
 }
 
 // Intended to be used with testify/assert. For example:
@@ -791,4 +809,12 @@ func allPassed(bools ...bool) bool {
 		}
 	}
 	return true
+}
+
+func randomData(t *testing.T, len int) []byte {
+	t.Helper()
+	b := make([]byte, len)
+	_, err := rand.Read(b)
+	require.NoError(t, err)
+	return b
 }
