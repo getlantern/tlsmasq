@@ -164,7 +164,7 @@ func (dc *disguisedConn) Write(b []byte) (n int, err error) {
 	if !dc.inDisguise {
 		return dc.Conn.Write(b)
 	}
-	n, err = tlsutil.WriteRecord(dc.Conn, b, dc.state)
+	n, err = tlsutil.WriteRecords(dc.Conn, b, dc.state)
 	if err != nil {
 		err = fmt.Errorf("failed to wrap data in TLS record: %w", err)
 	}

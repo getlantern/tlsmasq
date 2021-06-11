@@ -52,8 +52,10 @@ func (conn *bufferedConn) Write(b []byte) (n int, err error) {
 	if conn.closed {
 		return 0, io.ErrClosedPipe
 	}
-	conn.writes <- b
-	return len(b), nil
+	copyB := make([]byte, len(b))
+	n = copy(copyB, b)
+	conn.writes <- copyB
+	return
 }
 
 func (conn *bufferedConn) Close() error {

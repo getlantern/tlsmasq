@@ -7,6 +7,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
@@ -61,12 +62,9 @@ func TestHandshake(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		require.NoError(t, serverConn.Handshake())
-	}()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- serverConn.Handshake() }()
 
-	require.NoError(t, clientConn.Handshake())
-	<-done
+	assert.NoError(t, clientConn.Handshake())
+	assert.NoError(t, <-serverErr)
 }

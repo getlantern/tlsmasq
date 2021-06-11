@@ -62,8 +62,19 @@ func (rr *recordReader) currentRemaining() int {
 	return payloadLen - len(rr.current) + recordHeaderLen
 }
 
+func (rr *recordReader) currentlyBuffered() int {
+	return len(rr.current)
+}
+
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

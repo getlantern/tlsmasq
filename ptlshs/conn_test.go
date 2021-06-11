@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"io"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
+	"github.com/getlantern/tlsutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,14 +52,60 @@ func TestHandshake(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		require.NoError(t, serverConn.Handshake())
-	}()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- serverConn.Handshake() }()
+	assert.NoError(t, clientConn.Handshake())
+	assert.NoError(t, <-serverErr)
+}
 
-	require.NoError(t, clientConn.Handshake())
-	<-done
+// Tests the case in which the copy buffer used to read from the client connection is not large
+// enough to hold the entire client signal. This was an oversight which created bugs in production.
+//
+// https://github.com/getlantern/tlsmasq/issues/17
+func TestIssue17(t *testing.T) {
+	t.Parallel()
+
+	var (
+		version          uint16 = tls.VersionTLS12
+		suite            uint16 = tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+		secret1, secret2 [52]byte
+		iv1, iv2         [16]byte
+		seq1, seq2       [8]byte
+	)
+	for _, b := range [][]byte{secret1[:], secret2[:], iv1[:], iv2[:], seq1[:], seq2[:]} {
+		_, err := rand.Read(b)
+		require.NoError(t, err)
+	}
+	writerState, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
+	require.NoError(t, err)
+	readerState, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
+	require.NoError(t, err)
+
+	sig, err := newClientSignal(time.Hour)
+	require.NoError(t, err)
+
+	clientTransport, serverTransport := testutil.BufferedPipe()
+	_, err = tlsutil.WriteRecord(clientTransport, *sig, writerState)
+	require.NoError(t, err)
+
+	conn := &serverConn{
+		Conn:       serverTransport,
+		nonceCache: newNonceCache(time.Hour),
+	}
+	require.NoError(t,
+		conn.watchForCompletion(context.Background(), len(*sig)-1, readerState, newDummyOrigin()))
+}
+
+// Used by TestIssue17
+type dummyOrigin struct {
+	closed chan struct{}
+}
+
+func newDummyOrigin() *dummyOrigin { return &dummyOrigin{make(chan struct{})} }
+
+func (do *dummyOrigin) Read(_ []byte) (int, error) {
+	<-do.closed
+	return 0, io.EOF
 }
 
 // Calling Close on a net.Conn should unblock any Read or Write operations.
@@ -108,3 +157,23 @@ func TestCloseUnblock(t *testing.T) {
 	// Calling Close on clientConn should have caused Read to unblock and return an error.
 	require.Error(t, <-readErrC)
 }
+
+func (do *dummyOrigin) Write(b []byte) (int, error) {
+	select {
+	case <-do.closed:
+		return 0, io.ErrClosedPipe
+	default:
+		return len(b), nil
+	}
+}
+
+func (do *dummyOrigin) Close() error {
+	close(do.closed)
+	return nil
+}
+
+func (do *dummyOrigin) LocalAddr() net.Addr                { return nil }
+func (do *dummyOrigin) RemoteAddr() net.Addr               { return nil }
+func (do *dummyOrigin) SetDeadline(_ time.Time) error      { return nil }
+func (do *dummyOrigin) SetReadDeadline(_ time.Time) error  { return nil }
+func (do *dummyOrigin) SetWriteDeadline(_ time.Time) error { return nil }
