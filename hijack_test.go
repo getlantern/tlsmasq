@@ -3,12 +3,14 @@ package tlsmasq
 import (
 	"crypto/rand"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"testing"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsmasq/ptlshs"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +40,8 @@ func TestHijack(t *testing.T) {
 
 	serverToOrigin, originToServer := testutil.BufferedPipe()
 	proxiedConn := tls.Server(originToServer, tlsCfg)
-	go func() { require.NoError(t, proxiedConn.Handshake()) }()
+	proxiedHSErr := make(chan error, 1)
+	go func() { proxiedHSErr <- proxiedConn.Handshake() }()
 	defer serverToOrigin.Close()
 	defer originToServer.Close()
 
@@ -56,34 +59,54 @@ func TestHijack(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	done := make(chan struct{})
+	serverErr := make(chan error, 1)
+	msgFromClient := make(chan string, 1)
 	go func() {
-		defer close(done)
+		serverErr <- func() error {
+			_, err := hijack(serverConn, tlsCfg, secret, false)
+			if err != nil {
+				return fmt.Errorf("hijack failed: %w", err)
+			}
 
-		_, err := hijack(serverConn, tlsCfg, secret, false)
-		require.NoError(t, err)
+			b := make([]byte, len(clientMsg))
+			n, err := serverConn.Read(b)
+			if err != nil {
+				return fmt.Errorf("read failed: %w", err)
+			}
+			msgFromClient <- string(b[:n])
 
-		b := make([]byte, len(clientMsg))
-		n, err := serverConn.Read(b)
-		require.NoError(t, err)
-		require.Equal(t, clientMsg, string(b[:n]))
-
-		_, err = serverConn.Write([]byte(serverMsg))
-		require.NoError(t, err)
+			_, err = serverConn.Write([]byte(serverMsg))
+			if err != nil {
+				return fmt.Errorf("write failed: %w", err)
+			}
+			return nil
+		}()
 	}()
 
-	_, err = hijack(clientConn, tlsCfg, secret, true)
-	require.NoError(t, err)
+	msgFromServer, clientErr := func() (string, error) {
+		_, err = hijack(clientConn, tlsCfg, secret, true)
+		if err != nil {
+			return "", fmt.Errorf("hijack failed: %w", err)
+		}
 
-	_, err = clientConn.Write([]byte(clientMsg))
-	require.NoError(t, err)
+		_, err = clientConn.Write([]byte(clientMsg))
+		if err != nil {
+			return "", fmt.Errorf("write failed: %w", err)
+		}
 
-	b := make([]byte, len(serverMsg))
-	n, err := clientConn.Read(b)
-	require.NoError(t, err)
-	require.Equal(t, serverMsg, string(b[:n]))
+		b := make([]byte, len(serverMsg))
+		n, err := clientConn.Read(b)
+		if err != nil {
+			return "", fmt.Errorf("read failed: %w", err)
+		}
+		return string(b[:n]), nil
+	}()
 
-	<-done
+	assert.NoError(t, clientErr)
+	assert.NoError(t, <-serverErr)
+	assert.NoError(t, <-proxiedHSErr)
+	assert.Equal(t, clientMsg, <-msgFromClient)
+	assert.Equal(t, serverMsg, msgFromServer)
 }
 
 var (

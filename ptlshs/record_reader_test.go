@@ -117,8 +117,9 @@ func createRecordStream(t *testing.T, dataRecords int) []byte {
 	defer server.Close()
 	defer client.Close()
 
+	clientErr := make(chan error, 1)
 	go func() {
-		assert.NoError(t, client.Handshake())
+		clientErr <- client.Handshake()
 		// Read from the client side until the connection is closed
 		b := make([]byte, 1024)
 		for {
@@ -127,7 +128,12 @@ func createRecordStream(t *testing.T, dataRecords int) []byte {
 			}
 		}
 	}()
-	require.NoError(t, server.Handshake())
+	if !allPassed(
+		assert.NoError(t, server.Handshake()),
+		assert.NoError(t, <-clientErr),
+	) {
+		t.FailNow()
+	}
 
 	// We have to read from the server side of the connection or the deferred client.Close call will
 	// block forever (it tries to write and piped connections have no internal buffering).
