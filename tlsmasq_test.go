@@ -3,9 +3,10 @@ package tlsmasq
 import (
 	"crypto/rand"
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"io"
 	"net"
-	"sync"
 	"testing"
 
 	"github.com/getlantern/tlsmasq/ptlshs"
@@ -17,8 +18,8 @@ func TestListenAndDial(t *testing.T) {
 	t.Parallel()
 
 	var (
-		secret               [52]byte
-		wg                   = new(sync.WaitGroup)
+		secret [52]byte
+		// wg                   = new(sync.WaitGroup)
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 
@@ -29,15 +30,18 @@ func TestListenAndDial(t *testing.T) {
 	require.NoError(t, err)
 	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
-	wg.Add(1)
+	originErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-
-		conn, err := origin.Accept()
-		if !assert.NoError(t, err) {
-			return
-		}
-		assert.NoError(t, conn.(*tls.Conn).Handshake())
+		originErr <- func() error {
+			conn, err := origin.Accept()
+			if err != nil {
+				return fmt.Errorf("accept failed: %w", err)
+			}
+			if err := conn.(*tls.Conn).Handshake(); err != nil {
+				return fmt.Errorf("handshake failed: %w", err)
+			}
+			return nil
+		}()
 	}()
 
 	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
@@ -62,39 +66,54 @@ func TestListenAndDial(t *testing.T) {
 	require.NoError(t, err)
 	defer l.Close()
 
-	wg.Add(1)
+	serverErr := make(chan error, 1)
+	msgFromClient := make(chan string, 1)
 	go func() {
-		defer wg.Done()
-		conn, err := l.Accept()
-		if !assert.NoError(t, err) {
-			return
+		serverErr <- func() error {
+			conn, err := l.Accept()
+			if err != nil {
+				return fmt.Errorf("accept failed: %w", err)
+			}
+			defer conn.Close()
+
+			b := make([]byte, len(clientMsg))
+			n, err := conn.Read(b)
+			if err != nil {
+				return fmt.Errorf("read failed: %w", err)
+			}
+			msgFromClient <- string(b[:n])
+
+			_, err = conn.Write([]byte(serverMsg))
+			if err != nil {
+				return fmt.Errorf("write failed: %w", err)
+			}
+			return nil
+		}()
+	}()
+
+	msgFromServer, clientErr := func() (string, error) {
+		conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
+		if err != nil {
+			return "", fmt.Errorf("dial failed: %w", err)
 		}
 		defer conn.Close()
 
-		b := make([]byte, len(clientMsg))
-		n, err := conn.Read(b)
-		if !assert.NoError(t, err) {
-			return
-		}
-		if !assert.Equal(t, clientMsg, string(b[:n])) {
-			return
+		_, err = conn.Write([]byte(clientMsg))
+		if err != nil {
+			return "", fmt.Errorf("write failed: %w", err)
 		}
 
-		_, err = conn.Write([]byte(serverMsg))
-		assert.NoError(t, err)
+		b := make([]byte, len(serverMsg))
+		n, err := conn.Read(b)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("read failed: %w", err)
+		}
+		return string(b[:n]), nil
 	}()
 
-	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	_, err = conn.Write([]byte(clientMsg))
-	require.NoError(t, err)
-
-	b := make([]byte, len(serverMsg))
-	n, err := conn.Read(b)
-	require.True(t, err == nil || err == io.EOF, "unexpected error: %v", err)
-	require.Equal(t, serverMsg, string(b[:n]))
-
-	wg.Wait()
+	assert.NoError(t, clientErr)
+	assert.NoError(t, <-serverErr)
+	assert.NoError(t, <-originErr)
+	assert.Equal(t, clientMsg, <-msgFromClient)
+	assert.Equal(t, serverMsg, msgFromServer)
 }

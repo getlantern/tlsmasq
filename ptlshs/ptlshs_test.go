@@ -22,7 +22,6 @@ func TestListenAndDial(t *testing.T) {
 
 	var (
 		secret               [52]byte
-		wg                   = new(sync.WaitGroup)
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 	_, err := rand.Read(secret[:])
@@ -32,14 +31,18 @@ func TestListenAndDial(t *testing.T) {
 	require.NoError(t, err)
 	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
-	wg.Add(1)
+	originErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		conn, err := origin.Accept()
-		if !assert.NoError(t, err) {
-			return
-		}
-		assert.NoError(t, conn.(*tls.Conn).Handshake())
+		originErr <- func() error {
+			conn, err := origin.Accept()
+			if err != nil {
+				return fmt.Errorf("accept error: %w", err)
+			}
+			if err := conn.(*tls.Conn).Handshake(); err != nil {
+				return fmt.Errorf("handshake error: %w", err)
+			}
+			return nil
+		}()
 	}()
 
 	dialerCfg := DialerConfig{
@@ -54,51 +57,64 @@ func TestListenAndDial(t *testing.T) {
 	require.NoError(t, err)
 	defer l.Close()
 
-	wg.Add(1)
+	rcvdClientMsg := make(chan string, 1)
+	listenerErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		conn, err := l.Accept()
-		if !assert.NoError(t, err) {
-			return
+		listenerErr <- func() error {
+			conn, err := l.Accept()
+			if err != nil {
+				return fmt.Errorf("accept error: %w", err)
+			}
+			defer conn.Close()
+
+			b := make([]byte, len(clientMsg))
+			n, err := conn.Read(b)
+			if err != nil {
+				return fmt.Errorf("read error: %w", err)
+			}
+			rcvdClientMsg <- string(b[:n])
+
+			if _, err = conn.Write([]byte(serverMsg)); err != nil {
+				return fmt.Errorf("write error: %w", err)
+			}
+			return nil
+		}()
+	}()
+
+	rcvdServerMsg, dialErr := func() (string, error) {
+		conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
+		if err != nil {
+			return "", fmt.Errorf("dial error: %w", err)
 		}
 		defer conn.Close()
 
-		b := make([]byte, len(clientMsg))
-		n, err := conn.Read(b)
-		if !assert.NoError(t, err) {
-			return
-		}
-		if !assert.Equal(t, clientMsg, string(b[:n])) {
-			return
+		if _, err := conn.Write([]byte(clientMsg)); err != nil {
+			return "", fmt.Errorf("write error: %w", err)
 		}
 
-		_, err = conn.Write([]byte(serverMsg))
-		assert.NoError(t, err)
+		b := make([]byte, len(serverMsg))
+		n, err := conn.Read(b)
+		if err != nil {
+			return "", fmt.Errorf("read error: %w", err)
+		}
+		return string(b[:n]), nil
 	}()
 
-	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	_, err = conn.Write([]byte(clientMsg))
-	require.NoError(t, err)
-
-	b := make([]byte, len(serverMsg))
-	n, err := conn.Read(b)
-	require.NoError(t, err)
-	require.Equal(t, serverMsg, string(b[:n]))
-
-	wg.Wait()
+	if allPassed(
+		assert.NoError(t, dialErr),
+		assert.NoError(t, <-listenerErr),
+		assert.NoError(t, <-originErr),
+	) {
+		assert.Equal(t, clientMsg, <-rcvdClientMsg)
+		assert.Equal(t, serverMsg, rcvdServerMsg)
+	}
 }
 
 // TestSessionResumption ensures that ptlshs is compatible with TLS session resumption.
 func TestSessionResumption(t *testing.T) {
 	t.Parallel()
 
-	var (
-		secret [52]byte
-		wg     = new(sync.WaitGroup)
-	)
+	var secret [52]byte
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
@@ -106,18 +122,21 @@ func TestSessionResumption(t *testing.T) {
 	require.NoError(t, err)
 	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
-	wg.Add(1)
+	originErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		for i := 0; i < 2; i++ {
-			conn, err := origin.Accept()
-			if !assert.NoError(t, err) {
-				return
+		originErr <- func() error {
+			for i := 0; i < 2; i++ {
+				conn, err := origin.Accept()
+				if err != nil {
+					return fmt.Errorf("accept error for connection %d: %w", i, err)
+				}
+				defer conn.Close()
+				if err := conn.(*tls.Conn).Handshake(); err != nil {
+					return fmt.Errorf("handshake error for connection %d: %w", i, err)
+				}
 			}
-			if !assert.NoError(t, conn.(*tls.Conn).Handshake()) {
-				return
-			}
-		}
+			return nil
+		}()
 	}()
 
 	handshaker := &resumptionCheckingHandshaker{
@@ -134,38 +153,58 @@ func TestSessionResumption(t *testing.T) {
 	require.NoError(t, err)
 	defer l.Close()
 
-	wg.Add(1)
+	listenerErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		for i := 0; i < 2; i++ {
-			conn, err := l.Accept()
-			if !assert.NoError(t, err) {
-				return
-			}
-			defer conn.Close()
+		listenerErr <- func() error {
+			for i := 0; i < 2; i++ {
+				conn, err := l.Accept()
+				if err != nil {
+					return fmt.Errorf("accept error for connection %d: %w", i, err)
+				}
+				defer conn.Close()
 
-			if !assert.NoError(t, conn.(Conn).Handshake()) {
-				return
+				if err := conn.(Conn).Handshake(); err != nil {
+					return fmt.Errorf("handshake error for connection %d: %w", i, err)
+				}
 			}
-		}
+			return nil
+		}()
 	}()
 
-	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
-	require.NoError(t, err)
-	defer conn.Close()
+	dialErr := func() error {
+		conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
+		if err != nil {
+			return fmt.Errorf("dial error for connection 1: %w", err)
+		}
+		defer conn.Close()
 
-	require.NoError(t, conn.(Conn).Handshake())
-	require.NoError(t, conn.Close())
+		if err := conn.(Conn).Handshake(); err != nil {
+			return fmt.Errorf("handshake error for connection 1: %w", err)
+		}
+		if err := conn.Close(); err != nil {
+			return fmt.Errorf("close error for connection 1: %w", err)
+		}
 
-	// Dial a new connection with the same config. This should resume our session.
-	conn, err = Dial("tcp", l.Addr().String(), dialerCfg)
-	require.NoError(t, err)
-	defer conn.Close()
+		// Dial a new connection with the same config. This should resume our session.
+		conn, err = Dial("tcp", l.Addr().String(), dialerCfg)
+		if err != nil {
+			return fmt.Errorf("dial error for connection 2: %w", err)
+		}
+		defer conn.Close()
 
-	require.NoError(t, conn.(Conn).Handshake())
-	require.True(t, handshaker.resumedLastHandshake)
+		if err := conn.(Conn).Handshake(); err != nil {
+			return fmt.Errorf("handshake error for connection 2: %w", err)
+		}
+		return nil
+	}()
 
-	wg.Wait()
+	if allPassed(
+		assert.NoError(t, dialErr),
+		assert.NoError(t, <-listenerErr),
+		assert.NoError(t, <-originErr),
+	) {
+		require.True(t, handshaker.resumedLastHandshake)
+	}
 }
 
 func TestSignalReplay(t *testing.T) {
@@ -183,23 +222,25 @@ func TestSignalReplay(t *testing.T) {
 	require.NoError(t, err)
 	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
+	originErr := make(chan error, 1)
 	go func() {
-		for i := 0; i < 2; i++ {
-			conn, err := origin.Accept()
-			if !assert.NoError(t, err) {
-				return
-			}
+		originErr <- func() error {
+			for i := 0; i < 2; i++ {
+				conn, err := origin.Accept()
+				if err != nil {
+					return fmt.Errorf("accept error for connection %d: %w", i, err)
+				}
+				defer conn.Close()
 
-			go func(c net.Conn) {
-				if !assert.NoError(t, c.(*tls.Conn).Handshake()) {
-					return
+				if err := conn.(*tls.Conn).Handshake(); err != nil {
+					return fmt.Errorf("handshake error for connection %d: %w", i, err)
 				}
-				_, err = c.Write([]byte(originMsg))
-				if !assert.NoError(t, err) {
-					return
+				if _, err = conn.Write([]byte(originMsg)); err != nil {
+					return fmt.Errorf("write error for connection %d: %w", i, err)
 				}
-			}(conn)
-		}
+			}
+			return nil
+		}()
 	}()
 
 	// We capture the encrypted signal by watching the bytes going in and out of the server. We use
@@ -270,49 +311,73 @@ func TestSignalReplay(t *testing.T) {
 	l := WrapListener(mitmListener{_l, onServerRead, onServerWrite}, listenerCfg)
 	defer l.Close()
 
+	listenerErr := make(chan error, 1)
 	go func() {
-		for i := 0; i < 2; i++ {
-			conn, err := l.Accept()
-			if !assert.NoError(t, err) {
-				return
+		listenerErr <- func() error {
+			for i := 0; i < 2; i++ {
+				conn, err := l.Accept()
+				if err != nil {
+					return fmt.Errorf("accept error for connection %d: %w", i, err)
+				}
+				go func() {
+					// Try to write, but don't check for write errors. This message will only make it to
+					// the client if our replay detection is broken. We would see it in a check below.
+					conn.Write([]byte(serverMsg))
+					conn.Close()
+				}()
 			}
-			go func() {
-				// Try to write, but don't check for write errors. This message will only make it to
-				// the client if our replay detection is broken. We would see it in a check below.
-				conn.Write([]byte(serverMsg))
-			}()
-		}
+			return nil
+		}()
 	}()
 
-	// Dial once so that our callbacks pick up the signal.
-	dialerCfg := DialerConfig{
-		Handshaker: StdLibHandshaker{&tls.Config{InsecureSkipVerify: true}},
-		Secret:     secret,
+	rcvdFromOrigin, dialErr := func() (string, error) {
+		// Dial once so that our callbacks pick up the signal.
+		dialerCfg := DialerConfig{
+			Handshaker: StdLibHandshaker{&tls.Config{InsecureSkipVerify: true}},
+			Secret:     secret,
+		}
+		conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
+		if err != nil {
+			return "", fmt.Errorf("dial error for first connection: %w", err)
+		}
+		if err := conn.(Conn).Handshake(); err != nil {
+			return "", fmt.Errorf("handshake error for first connection: %w", err)
+		}
+		defer conn.Close()
+
+		encryptedSignal := <-encryptedSignalChan
+
+		// Now we dial again, but with a standard TLS dialer. This should get proxied through to the
+		// TLS listener.
+		conn, err = tls.DialWithDialer(
+			&net.Dialer{},
+			"tcp", l.Addr().String(),
+			&tls.Config{InsecureSkipVerify: true})
+		if err != nil {
+			return "", fmt.Errorf("dial error for second connection: %w", err)
+		}
+
+		// Now the server should be waiting for the completion signal. We replay the signal from before
+		// and see how the server responds.
+		if _, err := conn.Write(encryptedSignal); err != nil {
+			return "", fmt.Errorf("write error for second connection: %w", err)
+		}
+
+		b := make([]byte, len(originMsg))
+		n, err := conn.Read(b)
+		if err != nil {
+			return "", fmt.Errorf("read error for second connection: %w", err)
+		}
+		return string(b[:n]), nil
+	}()
+
+	if allPassed(
+		assert.NoError(t, dialErr),
+		assert.NoError(t, <-listenerErr),
+		assert.NoError(t, <-originErr),
+	) {
+		require.Equal(t, originMsg, rcvdFromOrigin)
 	}
-	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
-	require.NoError(t, err)
-	require.NoError(t, conn.(Conn).Handshake())
-	defer conn.Close()
-
-	encryptedSignal := <-encryptedSignalChan
-
-	// Now we dial again, but with a standard TLS dialer. This should get proxied through to the
-	// TLS listener.
-	conn, err = tls.DialWithDialer(
-		&net.Dialer{},
-		"tcp", l.Addr().String(),
-		&tls.Config{InsecureSkipVerify: true})
-	require.NoError(t, err)
-
-	// Now the server should be waiting for the completion signal. We replay the signal from before
-	// and see how the server responds.
-	_, err = conn.Write(encryptedSignal)
-	require.NoError(t, err)
-
-	b := make([]byte, len(originMsg))
-	n, err := conn.Read(b)
-	require.NoError(t, err)
-	require.Equal(t, originMsg, string(b[:n]))
 }
 
 // TestPostHandshakeData ensures that tlsmasq connections are resilient to origins sending data
@@ -322,8 +387,6 @@ func TestPostHandshakeData(t *testing.T) {
 	t.Parallel()
 
 	var (
-		wg = new(sync.WaitGroup)
-
 		secret               [52]byte
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
@@ -334,19 +397,22 @@ func TestPostHandshakeData(t *testing.T) {
 	require.NoError(t, err)
 	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
-	wg.Add(1)
+	originErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		conn, err := origin.Accept()
-		if !assert.NoError(t, err) {
-			return
-		}
-		if !assert.NoError(t, conn.(*tls.Conn).Handshake()) {
-			return
-		}
-		// Immediately send some data.
-		_, err = conn.Write([]byte("some nonsense from the origin"))
-		assert.NoError(t, err)
+		originErr <- func() error {
+			conn, err := origin.Accept()
+			if err != nil {
+				return fmt.Errorf("accept error: %w", err)
+			}
+			if err := conn.(*tls.Conn).Handshake(); err != nil {
+				return fmt.Errorf("handshake error: %w", err)
+			}
+			// Immediately send some data.
+			if _, err := conn.Write([]byte("some nonsense from the origin")); err != nil {
+				return fmt.Errorf("write error: %w", err)
+			}
+			return nil
+		}()
 	}()
 
 	dialerCfg := DialerConfig{
@@ -364,42 +430,58 @@ func TestPostHandshakeData(t *testing.T) {
 	require.NoError(t, err)
 	defer l.Close()
 
-	wg.Add(1)
+	rcvdFromClient := make(chan string, 1)
+	listenerErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		conn, err := l.Accept()
-		if !assert.NoError(t, err) {
-			return
+		listenerErr <- func() error {
+			conn, err := l.Accept()
+			if err != nil {
+				return fmt.Errorf("accept error: %w", err)
+			}
+			defer conn.Close()
+
+			b := make([]byte, len(clientMsg))
+			n, err := conn.Read(b)
+			if err != nil {
+				return fmt.Errorf("read error: %w", err)
+			}
+			rcvdFromClient <- string(b[:n])
+
+			if _, err := conn.Write([]byte(serverMsg)); err != nil {
+				return fmt.Errorf("write error: %w", err)
+			}
+			return nil
+		}()
+	}()
+
+	rcvdFromServer, dialErr := func() (string, error) {
+		conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
+		if err != nil {
+			return "", fmt.Errorf("dial error: %w", err)
 		}
 		defer conn.Close()
 
-		b := make([]byte, len(clientMsg))
-		n, err := conn.Read(b)
-		if !assert.NoError(t, err) {
-			return
-		}
-		if !assert.Equal(t, clientMsg, string(b[:n])) {
-			return
+		if _, err := conn.Write([]byte(clientMsg)); err != nil {
+			return "", fmt.Errorf("write error: %w", err)
 		}
 
-		_, err = conn.Write([]byte(serverMsg))
-		assert.NoError(t, err)
+		b := make([]byte, len(serverMsg))
+		n, err := conn.Read(b)
+		if err != nil {
+			return "", fmt.Errorf("read error: %w", err)
+		}
+		return string(b[:n]), nil
 	}()
 
-	conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	_, err = conn.Write([]byte(clientMsg))
-	require.NoError(t, err)
-
-	b := make([]byte, len(serverMsg))
-	n, err := conn.Read(b)
-	require.NoError(t, err)
-	// This is where we would see the unexpected data from the origin (wrapped in a TLS record).
-	require.Equal(t, serverMsg, string(b[:n]))
-
-	wg.Wait()
+	if allPassed(
+		assert.NoError(t, dialErr),
+		assert.NoError(t, <-listenerErr),
+		assert.NoError(t, <-originErr),
+	) {
+		assert.Equal(t, clientMsg, <-rcvdFromClient)
+		// This is where we would see the unexpected data from the origin (wrapped in a TLS record).
+		assert.Equal(t, serverMsg, rcvdFromServer)
+	}
 }
 
 // TestPostHandshakeInjection ensures that the connection is closed if garbage data is injected
@@ -417,8 +499,6 @@ func TestPostHandshakeInjection(t *testing.T) {
 	// Not the theoretical maximum, but the maximum allowed by all ciphers supported by tlsutil.
 	const maxTLSPayloadSize = 1150
 	var (
-		wg = new(sync.WaitGroup)
-
 		secret         [52]byte
 		injectorSecret [52]byte
 		injectorIV     [16]byte
@@ -436,14 +516,19 @@ func TestPostHandshakeInjection(t *testing.T) {
 	require.NoError(t, err)
 	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
-	wg.Add(1)
+	originErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		conn, err := origin.Accept()
-		if !assert.NoError(t, err) {
-			return
-		}
-		assert.NoError(t, conn.(*tls.Conn).Handshake())
+		originErr <- func() error {
+			conn, err := origin.Accept()
+			if err != nil {
+				return fmt.Errorf("accept error: %w", err)
+			}
+			defer conn.Close()
+			if err := conn.(*tls.Conn).Handshake(); err != nil {
+				return fmt.Errorf("handshake error: %w", err)
+			}
+			return nil
+		}()
 	}()
 
 	dialerCfg := DialerConfig{
@@ -535,14 +620,12 @@ func TestPostHandshakeInjection(t *testing.T) {
 	defer server.Close()
 	defer client.Close()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		server.Handshake()
-	}()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Handshake() }()
 
-	require.Error(t, client.Handshake())
-	wg.Wait()
+	assert.Error(t, client.Handshake())
+	assert.NoError(t, <-serverErr)
+	assert.NoError(t, <-originErr)
 }
 
 // TestProgressionToProxy ensures that the proxied connection continues if the client never sends
@@ -572,7 +655,6 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 	var (
 		secret               [52]byte
-		wg                   = new(sync.WaitGroup)
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 
@@ -583,29 +665,30 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 	require.NoError(t, err)
 	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
 
-	wg.Add(1)
+	rcvdFromClient := make(chan string, 1)
+	originErr := make(chan error, 1)
 	go func() {
-		defer wg.Done()
+		originErr <- func() error {
+			conn, err := origin.Accept()
+			if err != nil {
+				return fmt.Errorf("accept error: %w", err)
+			}
+			if !clientCloses { // TODO: maybe else t.Cleanup?
+				defer conn.Close()
+			}
 
-		conn, err := origin.Accept()
-		if !assert.NoError(t, err) {
-			return
-		}
-		if !clientCloses {
-			defer conn.Close()
-		}
+			b := make([]byte, len(clientMsg))
+			n, err := conn.Read(b)
+			if err != nil {
+				return fmt.Errorf("read error: %w", err)
+			}
+			rcvdFromClient <- string(b[:n])
 
-		b := make([]byte, len(clientMsg))
-		n, err := conn.Read(b)
-		if !assert.NoError(t, err) {
-			return
-		}
-		if !assert.Equal(t, clientMsg, string(b[:n])) {
-			return
-		}
-
-		_, err = conn.Write([]byte(serverMsg))
-		assert.NoError(t, err)
+			if _, err := conn.Write([]byte(serverMsg)); err != nil {
+				return fmt.Errorf("write error: %w", err)
+			}
+			return nil
+		}()
 	}()
 
 	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
@@ -615,29 +698,46 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 	// We expect the Handshake function to run for the duration of the test as it is serving as a
 	// proxy to the origin.
-	wg.Add(1)
 	go func() {
 		conn, err := l.Accept()
-		if !assert.NoError(t, err) {
+		if err != nil {
+			t.Logf("listener accept error: %v", err)
 			return
 		}
-		conn.(Conn).Handshake()
-		wg.Done()
+		if err := conn.(Conn).Handshake(); err != nil {
+			t.Logf("listener handshake error: %v", err)
+			return
+		}
 	}()
 
-	conn, err := dial(l.Addr().Network(), l.Addr().String())
-	require.NoError(t, err)
-	if clientCloses {
-		defer conn.Close()
+	rcvdFromServer, dialErr := func() (string, error) {
+		conn, err := dial(l.Addr().Network(), l.Addr().String())
+		if err != nil {
+			return "", fmt.Errorf("dial error: %w", err)
+		}
+		if clientCloses { // TODO: maybe else t.Cleanup?
+			defer conn.Close()
+		}
+
+		if _, err := conn.Write([]byte(clientMsg)); err != nil {
+			return "", fmt.Errorf("write error: %w", err)
+		}
+
+		b := make([]byte, len(serverMsg))
+		n, err := conn.Read(b)
+		if err != nil {
+			return "", fmt.Errorf("read error: %w", err)
+		}
+		return string(b[:n]), nil
+	}()
+
+	if allPassed(
+		assert.NoError(t, dialErr),
+		assert.NoError(t, <-originErr),
+	) {
+		assert.Equal(t, clientMsg, <-rcvdFromClient)
+		assert.Equal(t, serverMsg, rcvdFromServer)
 	}
-
-	_, err = conn.Write([]byte(clientMsg))
-	require.NoError(t, err)
-
-	b := make([]byte, len(serverMsg))
-	n, err := conn.Read(b)
-	require.NoError(t, err)
-	require.Equal(t, serverMsg, string(b[:n]))
 }
 
 type mitmListener struct {
@@ -675,4 +775,20 @@ func randomData(t *testing.T, len int) []byte {
 	_, err := rand.Read(b)
 	require.NoError(t, err)
 	return b
+}
+
+// Intended to be used with testify/assert. For example:
+//	if allPassed(
+// 	  assert.NoError(t, foo()),
+// 	  assert.NoError(t, bar()),
+//   ) {
+// 	  assert.NoError(t, onlyValidAfterFooBar())
+//   }
+func allPassed(bools ...bool) bool {
+	for _, b := range bools {
+		if !b {
+			return false
+		}
+	}
+	return true
 }
