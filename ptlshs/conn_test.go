@@ -137,15 +137,9 @@ func TestCloseUnblock(t *testing.T) {
 	defer clientConn.Close()
 
 	serverErrC := make(chan error)
-	readErrC := make(chan error)
-	go func() {
-		serverErrC <- serverConn.Handshake()
-	}()
-	go func() {
-		// n.b. Calling Read will initiate a ptlshs handshake from the client.
-		_, err := clientConn.Read(make([]byte, 10))
-		readErrC <- err
-	}()
+	clientErrC := make(chan error)
+	go func() { serverErrC <- serverConn.Handshake() }()
+	go func() { clientErrC <- clientConn.Handshake() }()
 
 	require.NoError(t, <-serverErrC)
 	// Introduce a small delay to ensure the client begins waiting for the completion signal.
@@ -155,7 +149,7 @@ func TestCloseUnblock(t *testing.T) {
 	clientTransport.Close()
 
 	// Calling Close on clientConn should have caused Read to unblock and return an error.
-	require.Error(t, <-readErrC)
+	require.Error(t, <-clientErrC)
 }
 
 func (do *dummyOrigin) Write(b []byte) (int, error) {
