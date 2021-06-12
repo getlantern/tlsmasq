@@ -15,6 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The time allowed for concurrent goroutines to get started and into the actual important bits.
+// The max delay we usually see is about 300 µs on a modern Macbook Pro and 15 ms in CircleCI.
+const goroutineStartTime = 100 * time.Millisecond
+
 func TestHandshake(t *testing.T) {
 	t.Parallel()
 
@@ -139,14 +143,15 @@ func TestCloseUnblock(t *testing.T) {
 	serverErrC := make(chan error)
 	clientErrC := make(chan error)
 	go func() { serverErrC <- serverConn.Handshake() }()
-	go func() { clientErrC <- clientConn.Handshake() }()
+	go func() { _, err := clientConn.Read(make([]byte, 10)); clientErrC <- err }()
 
 	require.NoError(t, <-serverErrC)
-	// Introduce a small delay to ensure the client begins waiting for the completion signal.
-	time.Sleep(time.Second)
-	// time.Sleep(50 * time.Millisecond) // TODO: how does this impact the time for -count 1000?
+
+	// Introduce a small, randomized delay in the hopes of catching the client at various points of
+	// the ptlshs handshake across test runs.
+
+	time.Sleep(randomDuration(t, 50*time.Millisecond))
 	clientConn.Close()
-	clientTransport.Close()
 
 	// Calling Close on clientConn should have caused Read to unblock and return an error.
 	require.Error(t, <-clientErrC)
@@ -171,3 +176,10 @@ func (do *dummyOrigin) RemoteAddr() net.Addr               { return nil }
 func (do *dummyOrigin) SetDeadline(_ time.Time) error      { return nil }
 func (do *dummyOrigin) SetReadDeadline(_ time.Time) error  { return nil }
 func (do *dummyOrigin) SetWriteDeadline(_ time.Time) error { return nil }
+
+func randomDuration(t *testing.T, max time.Duration) time.Duration {
+	t.Helper()
+	n, err := randInt(0, int(max))
+	require.NoError(t, err)
+	return time.Duration(n)
+}
