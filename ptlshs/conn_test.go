@@ -15,10 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The time allowed for concurrent goroutines to get started and into the actual important bits.
-// The max delay we usually see is about 300 µs on a modern Macbook Pro and 15 ms in CircleCI.
-const goroutineStartTime = 100 * time.Millisecond
-
 func TestHandshake(t *testing.T) {
 	t.Parallel()
 
