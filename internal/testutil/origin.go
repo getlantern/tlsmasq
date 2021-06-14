@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,6 +16,8 @@ type TLSOrigin struct {
 	logger        *SafeTestLogger
 	t             *testing.T
 	postHandshake func(net.Conn) error
+
+	sync.Mutex
 }
 
 // StartOrigin starts a TLSOrigin. There is no need to call Close on the returned origin.
@@ -25,7 +28,7 @@ func StartOrigin(t *testing.T, cfg *tls.Config) *TLSOrigin {
 	require.NoError(t, err)
 	t.Cleanup(func() { l.Close() })
 
-	o := &TLSOrigin{l, NewSafeLogger(t), t, nil}
+	o := &TLSOrigin{l, NewSafeLogger(t), t, nil, sync.Mutex{}}
 	go o.listenAndServe()
 	return o
 }
@@ -35,9 +38,17 @@ func (o *TLSOrigin) DialContext(ctx context.Context) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, "tcp", o.Addr().String())
 }
 
-// DoPostHandshake can be used to configure post-handshake behavior. Not concurrency safe.
+// DoPostHandshake can be used to configure post-handshake behavior.
 func (o *TLSOrigin) DoPostHandshake(f func(conn net.Conn) error) {
+	o.Lock()
 	o.postHandshake = f
+	o.Unlock()
+}
+
+func (o *TLSOrigin) getPostHandshake() func(net.Conn) error {
+	o.Lock()
+	defer o.Unlock()
+	return o.postHandshake
 }
 
 func (o *TLSOrigin) listenAndServe() {
@@ -55,10 +66,11 @@ func (o *TLSOrigin) listenAndServe() {
 				o.logger.Logf("origin handshake error for connection %d: %v", number, err)
 				return
 			}
-			if o.postHandshake == nil {
+			postHandshake := o.getPostHandshake()
+			if postHandshake == nil {
 				return
 			}
-			if err := o.postHandshake(conn); err != nil {
+			if err := postHandshake(conn); err != nil {
 				o.logger.Logf("origin post-handshake error for connection %d: %v", number, err)
 				return
 			}
