@@ -96,20 +96,7 @@ func TestIssue17(t *testing.T) {
 		conn.watchForCompletion(context.Background(), len(*sig)-1, readerState, newDummyOrigin()))
 }
 
-// Used by TestIssue17
-type dummyOrigin struct {
-	closed chan struct{}
-}
-
-func newDummyOrigin() *dummyOrigin { return &dummyOrigin{make(chan struct{})} }
-
-func (do *dummyOrigin) Read(_ []byte) (int, error) {
-	<-do.closed
-	return 0, io.EOF
-}
-
 // Calling Close on a net.Conn should unblock any Read or Write operations.
-// TODO: maybe a server version?
 func TestCloseUnblock(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +138,83 @@ func TestCloseUnblock(t *testing.T) {
 
 	// Calling Close on clientConn should have caused Read to unblock and return an error.
 	require.Error(t, <-clientErrC)
+}
+
+// TODO: merge with TestCloseUnblock
+func TestCloseUnblockServer(t *testing.T) {
+	t.Parallel()
+
+	const version, suite = tls.VersionTLS12, tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
+	var (
+		tlsCfg = &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         version,
+			MaxVersion:         version,
+			CipherSuites:       []uint16{suite},
+			Certificates:       []tls.Certificate{cert},
+		}
+		secret Secret
+	)
+	_, err := rand.Read(secret[:])
+	require.NoError(t, err)
+
+	origin, err := tls.Listen("tcp", "localhost:0", tlsCfg)
+	require.NoError(t, err)
+	defer origin.Close()
+
+	dialOrigin := func(_ context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
+
+	logger := newSafeLogger(t)
+	go func() {
+		conn, err := origin.Accept()
+		if err != nil {
+			logger.logf("origin accept error: %v", err)
+			return
+		}
+		if err := conn.(*tls.Conn).Handshake(); err != nil {
+			logger.logf("origin handshake error: %v", err)
+			return
+		}
+	}()
+
+	// Rather than connecting to an actual ptlshs server, we connect a client to a plain TLS server.
+	// The client will get the ServerHello, then hang waiting for the server's completion signal
+	// (since the completion signal is specific to ptlshs, it will never be sent).
+	clientTransport, serverTransport := testutil.BufferedPipe()
+	clientConn := tls.Client(clientTransport, tlsCfg)
+	serverConn := Server(serverTransport, ListenerConfig{DialOrigin: dialOrigin, Secret: secret})
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	clientErrC := make(chan error)
+	serverErrC := make(chan error)
+	go func() { clientErrC <- clientConn.Handshake() }()
+	go func() { _, err := serverConn.Read(make([]byte, 10)); serverErrC <- err }()
+
+	require.NoError(t, <-clientErrC)
+
+	// Introduce a small, randomized delay in the hopes of catching the server at various points of
+	// the ptlshs handshake across test runs.
+
+	time.Sleep(randomDuration(t, 50*time.Millisecond))
+	serverConn.Close()
+
+	// Calling Close on serverConn should have caused Read to unblock and return an error.
+	require.Error(t, <-serverErrC)
+}
+
+// Used by TestIssue17
+type dummyOrigin struct {
+	closed chan struct{}
+}
+
+func newDummyOrigin() *dummyOrigin { return &dummyOrigin{make(chan struct{})} }
+
+func (do *dummyOrigin) Read(_ []byte) (int, error) {
+	<-do.closed
+	return 0, io.EOF
 }
 
 func (do *dummyOrigin) Write(b []byte) (int, error) {
