@@ -183,7 +183,7 @@ func TestSignalReplay(t *testing.T) {
 
 	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 	origin.DoPostHandshake(func(conn net.Conn) error {
-		if _, err = conn.Write([]byte(originMsg)); err != nil {
+		if _, err := conn.Write([]byte(originMsg)); err != nil {
 			return fmt.Errorf("write error %v", err)
 		}
 		return nil
