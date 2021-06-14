@@ -30,7 +30,7 @@ func TestCancelConn(t *testing.T) {
 	}
 
 	readGroup.Wait()
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(goroutineStartTime)
 	require.NoError(t, rx.cancelIO())
 
 	for i := 0; i < parallelism; i++ {
