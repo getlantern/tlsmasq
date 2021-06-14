@@ -26,7 +26,7 @@ func TestListenAndDial(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	o := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
 	dialerCfg := DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
@@ -39,7 +39,7 @@ func TestListenAndDial(t *testing.T) {
 	}
 	listenerCfg := ListenerConfig{
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
-			DialOrigin: o.DialContext,
+			DialOrigin: origin.DialContext,
 			Secret:     secret,
 		},
 		TLSConfig: insecureTLSConfig,

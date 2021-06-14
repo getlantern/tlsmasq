@@ -1,11 +1,9 @@
 package tlsmasq
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"fmt"
-	"net"
 	"testing"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
@@ -39,13 +37,7 @@ func TestHijack(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	serverToOrigin, originToServer := testutil.BufferedPipe()
-	proxiedConn := tls.Server(originToServer, tlsCfg)
-	proxiedHSErr := make(chan error, 1)
-	go func() { proxiedHSErr <- proxiedConn.Handshake() }()
-	defer serverToOrigin.Close()
-	defer originToServer.Close()
-
+	origin := testutil.StartOrigin(t, tlsCfg)
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := ptlshs.Client(clientTransport, ptlshs.DialerConfig{
 		Handshaker: ptlshs.StdLibHandshaker{
@@ -54,7 +46,7 @@ func TestHijack(t *testing.T) {
 		Secret: secret,
 	})
 	serverConn := ptlshs.Server(serverTransport, ptlshs.ListenerConfig{
-		DialOrigin: func(_ context.Context) (net.Conn, error) { return serverToOrigin, nil },
+		DialOrigin: origin.DialContext,
 		Secret:     secret,
 	})
 	defer clientConn.Close()
@@ -105,7 +97,6 @@ func TestHijack(t *testing.T) {
 
 	assert.NoError(t, clientErr)
 	assert.NoError(t, <-serverErr)
-	assert.NoError(t, <-proxiedHSErr)
 	assert.Equal(t, clientMsg, <-msgFromClient)
 	assert.Equal(t, serverMsg, msgFromServer)
 }

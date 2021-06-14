@@ -37,17 +37,12 @@ func TestHandshake(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	serverToOrigin, originToServer := testutil.BufferedPipe()
-	proxiedConn := tls.Server(originToServer, tlsCfg)
-	go proxiedConn.Handshake()
-	defer serverToOrigin.Close()
-	defer originToServer.Close()
-
+	origin := testutil.StartOrigin(t, tlsCfg)
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
 	serverConn := Server(serverTransport, ListenerConfig{
-		func(_ context.Context) (net.Conn, error) { return serverToOrigin, nil },
-		secret, 0, make(chan error),
+		DialOrigin: origin.DialContext,
+		Secret:     secret,
 	})
 	defer serverConn.Close()
 	defer clientConn.Close()
@@ -131,9 +126,9 @@ func closeUnblockHelper(testClient bool) func(t *testing.T) {
 			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
 			peerConn = tls.Server(serverTransport, tlsCfg)
 		} else {
-			o := testutil.StartOrigin(t, tlsCfg)
+			origin := testutil.StartOrigin(t, tlsCfg)
 			peerConn = tls.Client(clientTransport, tlsCfg)
-			testConn = Server(serverTransport, ListenerConfig{o.DialContext, secret, 0, nil})
+			testConn = Server(serverTransport, ListenerConfig{origin.DialContext, secret, 0, nil})
 		}
 		defer testConn.Close()
 		defer peerConn.Close()

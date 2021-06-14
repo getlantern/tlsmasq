@@ -28,7 +28,7 @@ func TestListenAndDial(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	o := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
@@ -36,7 +36,7 @@ func TestListenAndDial(t *testing.T) {
 		},
 		Secret: secret,
 	}
-	listenerCfg := ListenerConfig{DialOrigin: o.DialContext, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestSessionResumption(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	o := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 	handshaker := &resumptionCheckingHandshaker{
 		Config: &tls.Config{
 			InsecureSkipVerify: true,
@@ -111,7 +111,7 @@ func TestSessionResumption(t *testing.T) {
 		},
 	}
 	dialerCfg := DialerConfig{secret, handshaker, 0}
-	listenerCfg := ListenerConfig{DialOrigin: o.DialContext, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
