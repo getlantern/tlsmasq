@@ -4,16 +4,27 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/getlantern/nettest"
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsutil"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConn(t *testing.T) {
+	pm := pipeMaker{
+		t:            t,
+		originConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+	}
+	nettest.TestConn(t, pm.makePipe)
+}
 
 func TestHandshake(t *testing.T) {
 	t.Parallel()
@@ -156,6 +167,29 @@ func closeUnblockHelper(testClient bool) func(t *testing.T) {
 		testConn.Close()
 		require.Error(t, <-testErrC)
 	}
+}
+
+// The ListenerConfig's DialOrigin function is not required; it will be filled in as needed.
+type pipeMaker struct {
+	t            *testing.T
+	originConfig *tls.Config
+}
+
+// Implements nettest.MakePipe.
+func (pm pipeMaker) makePipe() (c1, c2 net.Conn, stop func(), err error) {
+	var secret Secret
+	if _, err := rand.Read(secret[:]); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to generate secret: %w", err)
+	}
+
+	origin := testutil.StartOrigin(pm.t, pm.originConfig.Clone())
+	dCfg := DialerConfig{secret, StdLibHandshaker{}, 0}
+	lCfg := ListenerConfig{origin.DialContext, secret, 0, nil}
+
+	clientTransport, serverTransport := testutil.BufferedPipe()
+	client := Client(clientTransport, dCfg)
+	server := Server(serverTransport, lCfg)
+	return client, server, func() { client.Close(); server.Close() }, nil
 }
 
 // Used by TestIssue17
