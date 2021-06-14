@@ -131,11 +131,9 @@ func closeUnblockHelper(testClient bool) func(t *testing.T) {
 			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
 			peerConn = tls.Server(serverTransport, tlsCfg)
 		} else {
-			o := startOrigin(t, tlsCfg)
+			o := testutil.StartOrigin(t, tlsCfg)
 			peerConn = tls.Client(clientTransport, tlsCfg)
-			testConn = Server(serverTransport, ListenerConfig{
-				DialOrigin: o.dialContext, Secret: secret,
-			})
+			testConn = Server(serverTransport, ListenerConfig{o.DialContext, secret, 0, nil})
 		}
 		defer testConn.Close()
 		defer peerConn.Close()
@@ -163,39 +161,6 @@ func closeUnblockHelper(testClient bool) func(t *testing.T) {
 		testConn.Close()
 		require.Error(t, <-testErrC)
 	}
-}
-
-// Serves as a TLS origin, allowing us to proxy handshakes. Will close when the test completes.
-// TODO: replace other manually created origins
-type tlsOrigin struct {
-	net.Listener
-}
-
-func startOrigin(t *testing.T, cfg *tls.Config) tlsOrigin {
-	t.Helper()
-
-	l, err := tls.Listen("tcp", "localhost:0", cfg)
-	require.NoError(t, err)
-	t.Cleanup(func() { l.Close() })
-
-	logger := newSafeLogger(t)
-	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			logger.logf("origin accept error: %v", err)
-			return
-		}
-		if err := conn.(*tls.Conn).Handshake(); err != nil {
-			logger.logf("origin handshake error: %v", err)
-			return
-		}
-	}()
-
-	return tlsOrigin{l}
-}
-
-func (o tlsOrigin) dialContext(ctx context.Context) (net.Conn, error) {
-	return (&net.Dialer{}).DialContext(ctx, "tcp", o.Addr().String())
 }
 
 // Used by TestIssue17

@@ -715,15 +715,15 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 	// We expect the Handshake function to run for the duration of the test as it is serving as a
 	// proxy to the origin.
-	logger := newSafeLogger(t)
+	logger := testutil.NewSafeLogger(t)
 	go func() {
 		conn, err := l.Accept()
 		if err != nil {
-			logger.logf("listener accept error: %v", err)
+			logger.Logf("listener accept error: %v", err)
 			return
 		}
 		if err := conn.(Conn).Handshake(); err != nil {
-			logger.logf("listener handshake error: %v", err)
+			logger.Logf("listener handshake error: %v", err)
 			return
 		}
 	}()
@@ -787,32 +787,6 @@ func (h *resumptionCheckingHandshaker) Handshake(conn net.Conn) (*HandshakeResul
 	return &HandshakeResult{
 		tlsConn.ConnectionState().Version, tlsConn.ConnectionState().CipherSuite,
 	}, nil
-}
-
-type safeTestLogger struct {
-	sync.Mutex
-	testComplete bool
-	t            *testing.T
-}
-
-func newSafeLogger(t *testing.T) *safeTestLogger {
-	l := &safeTestLogger{t: t}
-	t.Cleanup(func() {
-		l.Lock()
-		l.testComplete = true
-		l.Unlock()
-	})
-	return l
-}
-
-func (l *safeTestLogger) logf(format string, a ...interface{}) {
-	l.Lock()
-	defer l.Unlock()
-	if l.testComplete {
-		return
-	}
-	l.t.Helper()
-	l.t.Logf(format, a...)
 }
 
 // Intended to be used with testify/assert. For example:
