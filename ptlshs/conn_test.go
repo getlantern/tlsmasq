@@ -98,77 +98,89 @@ func TestIssue17(t *testing.T) {
 
 // Calling Close on a net.Conn should unblock any Read or Write operations.
 func TestCloseUnblock(t *testing.T) {
-	t.Parallel()
-
-	const version, suite = tls.VersionTLS12, tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
-	var (
-		tlsCfg = &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         version,
-			MaxVersion:         version,
-			CipherSuites:       []uint16{suite},
-			Certificates:       []tls.Certificate{cert},
-		}
-		secret Secret
-	)
-	_, err := rand.Read(secret[:])
-	require.NoError(t, err)
-
-	// Rather than connecting to an actual ptlshs server, we connect a client to a plain TLS server.
-	// The client will get the ServerHello, then hang waiting for the server's completion signal
-	// (since the completion signal is specific to ptlshs, it will never be sent).
-	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
-	serverConn := tls.Server(serverTransport, tlsCfg)
-	defer serverConn.Close()
-	defer clientConn.Close()
-
-	serverErrC := make(chan error)
-	clientErrC := make(chan error)
-	go func() { serverErrC <- serverConn.Handshake() }()
-	go func() { _, err := clientConn.Read(make([]byte, 10)); clientErrC <- err }()
-
-	require.NoError(t, <-serverErrC)
-
-	// Introduce a small, randomized delay in the hopes of catching the client at various points of
-	// the ptlshs handshake across test runs.
-
-	time.Sleep(randomDuration(t, 50*time.Millisecond))
-	clientConn.Close()
-
-	// Calling Close on clientConn should have caused Read to unblock and return an error.
-	require.Error(t, <-clientErrC)
+	t.Run("Client", closeUnblockHelper(true))
+	t.Run("Server", closeUnblockHelper(false))
 }
 
-// TODO: merge with TestCloseUnblock
-func TestCloseUnblockServer(t *testing.T) {
-	t.Parallel()
+func closeUnblockHelper(testClient bool) func(t *testing.T) {
+	return func(t *testing.T) {
+		t.Parallel()
 
-	const version, suite = tls.VersionTLS12, tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
-	var (
-		tlsCfg = &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         version,
-			MaxVersion:         version,
-			CipherSuites:       []uint16{suite},
-			Certificates:       []tls.Certificate{cert},
+		// To test whether Close unblocks pending I/O, we initiate a handshake with a peer speaking
+		// plain TLS. The ptlshs side of the connection will hang waiting for the peer's completion
+		// signal. Since the completion signal is specific to ptlshs, it will never be sent.
+
+		const version, suite = tls.VersionTLS12, tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
+		var (
+			tlsCfg = &tls.Config{
+				InsecureSkipVerify: true,
+				MinVersion:         version,
+				MaxVersion:         version,
+				CipherSuites:       []uint16{suite},
+				Certificates:       []tls.Certificate{cert},
+			}
+			clientTransport, serverTransport = testutil.BufferedPipe()
+			secret                           Secret
+			testConn                         net.Conn
+			peerConn                         *tls.Conn
+		)
+		_, err := rand.Read(secret[:])
+		require.NoError(t, err)
+
+		if testClient {
+			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
+			peerConn = tls.Server(serverTransport, tlsCfg)
+		} else {
+			o := startOrigin(t, tlsCfg)
+			peerConn = tls.Client(clientTransport, tlsCfg)
+			testConn = Server(serverTransport, ListenerConfig{
+				DialOrigin: o.dialContext, Secret: secret,
+			})
 		}
-		secret Secret
-	)
-	_, err := rand.Read(secret[:])
-	require.NoError(t, err)
+		defer testConn.Close()
+		defer peerConn.Close()
 
-	origin, err := tls.Listen("tcp", "localhost:0", tlsCfg)
-	require.NoError(t, err)
-	defer origin.Close()
+		peerErrC := make(chan error)
+		testErrC := make(chan error)
+		go func() { peerErrC <- peerConn.Handshake() }()
+		go func() { _, err := testConn.Read(make([]byte, 10)); testErrC <- err }()
 
-	dialOrigin := func(_ context.Context) (net.Conn, error) {
-		return net.Dial("tcp", origin.Addr().String())
+		require.NoError(t, <-peerErrC)
+
+		// The TLS handshake is complete, so testConn should hang, waiting for the completion signal.
+		select {
+		case err := <-testErrC:
+			t.Fatalf("expected testConn.Read to be blocked, but got error: %v", err)
+		default:
+		}
+
+		// Introduce a small, randomized delay in the hopes of catching the server at various points of
+		// the ptlshs handshake across test runs.
+
+		time.Sleep(randomDuration(t, 50*time.Millisecond))
+
+		// Calling Close on testConn should cause Read to unblock and return an error.
+		testConn.Close()
+		require.Error(t, <-testErrC)
 	}
+}
+
+// Serves as a TLS origin, allowing us to proxy handshakes. Will close when the test completes.
+// TODO: replace other manually created origins
+type tlsOrigin struct {
+	net.Listener
+}
+
+func startOrigin(t *testing.T, cfg *tls.Config) tlsOrigin {
+	t.Helper()
+
+	l, err := tls.Listen("tcp", "localhost:0", cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { l.Close() })
 
 	logger := newSafeLogger(t)
 	go func() {
-		conn, err := origin.Accept()
+		conn, err := l.Accept()
 		if err != nil {
 			logger.logf("origin accept error: %v", err)
 			return
@@ -179,30 +191,11 @@ func TestCloseUnblockServer(t *testing.T) {
 		}
 	}()
 
-	// Rather than connecting to an actual ptlshs server, we connect a client to a plain TLS server.
-	// The client will get the ServerHello, then hang waiting for the server's completion signal
-	// (since the completion signal is specific to ptlshs, it will never be sent).
-	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := tls.Client(clientTransport, tlsCfg)
-	serverConn := Server(serverTransport, ListenerConfig{DialOrigin: dialOrigin, Secret: secret})
-	defer serverConn.Close()
-	defer clientConn.Close()
+	return tlsOrigin{l}
+}
 
-	clientErrC := make(chan error)
-	serverErrC := make(chan error)
-	go func() { clientErrC <- clientConn.Handshake() }()
-	go func() { _, err := serverConn.Read(make([]byte, 10)); serverErrC <- err }()
-
-	require.NoError(t, <-clientErrC)
-
-	// Introduce a small, randomized delay in the hopes of catching the server at various points of
-	// the ptlshs handshake across test runs.
-
-	time.Sleep(randomDuration(t, 50*time.Millisecond))
-	serverConn.Close()
-
-	// Calling Close on serverConn should have caused Read to unblock and return an error.
-	require.Error(t, <-serverErrC)
+func (o tlsOrigin) dialContext(ctx context.Context) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, "tcp", o.Addr().String())
 }
 
 // Used by TestIssue17
