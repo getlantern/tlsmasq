@@ -811,6 +811,7 @@ func (l *safeTestLogger) logf(format string, a ...interface{}) {
 	if l.testComplete {
 		return
 	}
+	l.t.Helper()
 	l.t.Logf(format, a...)
 }
 

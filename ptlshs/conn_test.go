@@ -137,25 +137,20 @@ func TestCloseUnblock(t *testing.T) {
 	defer clientConn.Close()
 
 	serverErrC := make(chan error)
-	readErrC := make(chan error)
-	go func() {
-		serverErrC <- serverConn.Handshake()
-	}()
-	go func() {
-		// n.b. Calling Read will initiate a ptlshs handshake from the client.
-		_, err := clientConn.Read(make([]byte, 10))
-		readErrC <- err
-	}()
+	clientErrC := make(chan error)
+	go func() { serverErrC <- serverConn.Handshake() }()
+	go func() { _, err := clientConn.Read(make([]byte, 10)); clientErrC <- err }()
 
 	require.NoError(t, <-serverErrC)
-	// Introduce a small delay to ensure the client begins waiting for the completion signal.
-	time.Sleep(time.Second)
-	// time.Sleep(50 * time.Millisecond) // TODO: how does this impact the time for -count 1000?
+
+	// Introduce a small, randomized delay in the hopes of catching the client at various points of
+	// the ptlshs handshake across test runs.
+
+	time.Sleep(randomDuration(t, 50*time.Millisecond))
 	clientConn.Close()
-	clientTransport.Close()
 
 	// Calling Close on clientConn should have caused Read to unblock and return an error.
-	require.Error(t, <-readErrC)
+	require.Error(t, <-clientErrC)
 }
 
 func (do *dummyOrigin) Write(b []byte) (int, error) {
@@ -177,3 +172,10 @@ func (do *dummyOrigin) RemoteAddr() net.Addr               { return nil }
 func (do *dummyOrigin) SetDeadline(_ time.Time) error      { return nil }
 func (do *dummyOrigin) SetReadDeadline(_ time.Time) error  { return nil }
 func (do *dummyOrigin) SetWriteDeadline(_ time.Time) error { return nil }
+
+func randomDuration(t *testing.T, max time.Duration) time.Duration {
+	t.Helper()
+	n, err := randInt(0, int(max))
+	require.NoError(t, err)
+	return time.Duration(n)
+}
