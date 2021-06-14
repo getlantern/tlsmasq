@@ -1,15 +1,14 @@
 package tlsmasq
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"testing"
 
+	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsmasq/ptlshs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,26 +26,7 @@ func TestListenAndDial(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
-	require.NoError(t, err)
-	dialOrigin := func(_ context.Context) (net.Conn, error) {
-		return net.Dial("tcp", origin.Addr().String())
-	}
-
-	originErr := make(chan error, 1)
-	go func() {
-		originErr <- func() error {
-			conn, err := origin.Accept()
-			if err != nil {
-				return fmt.Errorf("accept failed: %w", err)
-			}
-			if err := conn.(*tls.Conn).Handshake(); err != nil {
-				return fmt.Errorf("handshake failed: %w", err)
-			}
-			return nil
-		}()
-	}()
-
+	o := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
 	dialerCfg := DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
@@ -59,7 +39,7 @@ func TestListenAndDial(t *testing.T) {
 	}
 	listenerCfg := ListenerConfig{
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
-			DialOrigin: dialOrigin,
+			DialOrigin: o.DialContext,
 			Secret:     secret,
 		},
 		TLSConfig: insecureTLSConfig,
@@ -116,7 +96,6 @@ func TestListenAndDial(t *testing.T) {
 
 	assert.NoError(t, clientErr)
 	assert.NoError(t, <-serverErr)
-	assert.NoError(t, <-originErr)
 	assert.Equal(t, clientMsg, <-msgFromClient)
 	assert.Equal(t, serverMsg, msgFromServer)
 }
