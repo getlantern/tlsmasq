@@ -183,10 +183,10 @@ func (pm pipeMaker) makePipe() (c1, c2 net.Conn, stop func(), err error) {
 	}
 
 	origin := testutil.StartOrigin(pm.t, pm.originConfig.Clone())
-	dCfg := DialerConfig{secret, StdLibHandshaker{}, 0}
+	dCfg := DialerConfig{secret, StdLibHandshaker{Config: &tls.Config{InsecureSkipVerify: true}}, 0}
 	lCfg := ListenerConfig{origin.DialContext, secret, 0, nil}
 
-	clientTransport, serverTransport := testutil.BufferedPipe()
+	clientTransport, serverTransport := net.Pipe()
 	client := Client(clientTransport, dCfg)
 	server := Server(serverTransport, lCfg)
 	return client, server, func() { client.Close(); server.Close() }, nil
