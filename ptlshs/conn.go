@@ -96,14 +96,14 @@ func Client(toServer net.Conn, cfg DialerConfig) Conn {
 
 func (c *clientConn) Read(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
-		return 0, fmt.Errorf("handshake failed: %w", err)
+		return 0, wrapError("handshake failed", err)
 	}
 	return c.Conn.Read(b)
 }
 
 func (c *clientConn) Write(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
-		return 0, fmt.Errorf("handshake failed: %w", err)
+		return 0, wrapError("handshake failed", err)
 	}
 	return c.Conn.Write(b)
 }
@@ -147,7 +147,7 @@ func (c *clientConn) handshake() error {
 		return err
 	}
 	if serverRandom == nil {
-		return fmt.Errorf("never saw server hello")
+		return errors.New("never saw server hello")
 	}
 	seq, iv, err := deriveSeqAndIV(serverRandom)
 	if err != nil {
@@ -163,12 +163,12 @@ func (c *clientConn) handshake() error {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
 	if _, err = tlsutil.WriteRecord(c.Conn, *signal, tlsState); err != nil {
-		return fmt.Errorf("failed to signal completion: %w", err)
+		return wrapError("failed to signal completion", err)
 	}
 	// The watchForCompletionFunction needs direct control over what is written to the transcript.
 	transcriptDone = true
 	if err := c.watchForCompletion(tlsState, transcriptHMAC); err != nil {
-		return fmt.Errorf("error watching for server completion signal: %w", err)
+		return wrapError("error watching for server completion signal", err)
 	}
 	// We're overwriting concurrently accessed fields here. However, these are not used concurrently
 	// until the handshake is complete.
@@ -716,6 +716,7 @@ func makeNetworkCall(networkFn func([]byte) (int, error), buf []byte) (int, erro
 	}
 }
 
+// Different than a net.Error. Used only to distinguish network errors from protocol-level errors.
 type networkError struct {
 	cause error
 }
@@ -726,6 +727,26 @@ func (err networkError) Error() string {
 
 func (err networkError) Unwrap() error {
 	return err.cause
+}
+
+// Used to ensure we pass back net.Errors when wrapped connections return them to us.
+type wrappedNetError struct {
+	wrapped net.Error
+	msg     string
+}
+
+func (err wrappedNetError) Error() string   { return fmt.Sprintf("%s: %v", err.msg, err.wrapped) }
+func (err wrappedNetError) Timeout() bool   { return err.wrapped.Timeout() }
+func (err wrappedNetError) Temporary() bool { return err.wrapped.Temporary() }
+func (err wrappedNetError) Unwrap() error   { return err.wrapped }
+
+// Wraps the input error with the message. Uses wrappedNetError if err is a net.Error. Otherwise,
+// fmt.Errorf is used.
+func wrapError(msg string, err error) error {
+	if netErr, ok := err.(net.Error); ok {
+		return wrappedNetError{netErr, msg}
+	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 // Proxies until an error is returned on either connection or the context completes.
