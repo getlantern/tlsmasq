@@ -23,7 +23,8 @@ func TestConn(t *testing.T) {
 		t:            t,
 		originConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
 	}
-	nettest.TestConn(t, pm.makePipe)
+	t.Run("client first", func(t *testing.T) { nettest.TestConn(t, pm.clientFirstPipe) })
+	t.Run("server first", func(t *testing.T) { nettest.TestConn(t, pm.serverFirstPipe) })
 }
 
 func TestHandshake(t *testing.T) {
@@ -176,8 +177,7 @@ type pipeMaker struct {
 }
 
 // Implements nettest.MakePipe.
-// TODO: maybe a c1 <=> c2 switched version?
-func (pm pipeMaker) makePipe() (c1, c2 net.Conn, stop func(), err error) {
+func (pm pipeMaker) makePipe() (client, server net.Conn, stop func(), err error) {
 	var secret Secret
 	if _, err := rand.Read(secret[:]); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to generate secret: %w", err)
@@ -188,8 +188,8 @@ func (pm pipeMaker) makePipe() (c1, c2 net.Conn, stop func(), err error) {
 	lCfg := ListenerConfig{origin.DialContext, secret, 0, nil}
 
 	clientTransport, serverTransport := net.Pipe()
-	client := Client(clientTransport, dCfg)
-	server := Server(serverTransport, lCfg)
+	client = Client(clientTransport, dCfg)
+	server = Server(serverTransport, lCfg)
 	stop = func() { client.Close(); server.Close() }
 
 	// We execute the handshake before returning the piped connections. Ideally the tests defined in
@@ -198,8 +198,8 @@ func (pm pipeMaker) makePipe() (c1, c2 net.Conn, stop func(), err error) {
 	// tls.Conn instances would suffer from the same issues (and more), so we are in good company.
 
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.Handshake() }()
-	if err := client.Handshake(); err != nil {
+	go func() { serverErr <- server.(Conn).Handshake() }()
+	if err := client.(Conn).Handshake(); err != nil {
 		stop()
 		return nil, nil, nil, fmt.Errorf("client handshake error: %w", err)
 	}
@@ -209,6 +209,18 @@ func (pm pipeMaker) makePipe() (c1, c2 net.Conn, stop func(), err error) {
 	}
 
 	return client, server, stop, nil
+}
+
+// nettest.TestConn focuses on the first connection of the pair. We want to test both the client
+// side and server side connections, so we have separate make-pipe functions for each purpose.
+
+func (pm pipeMaker) clientFirstPipe() (client, server net.Conn, stop func(), err error) {
+	return pm.makePipe()
+}
+
+func (pm pipeMaker) serverFirstPipe() (server, client net.Conn, stop func(), err error) {
+	client, server, stop, err = pm.clientFirstPipe()
+	return
 }
 
 // Used by TestIssue17
