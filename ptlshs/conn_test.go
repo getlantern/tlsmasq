@@ -176,6 +176,7 @@ type pipeMaker struct {
 }
 
 // Implements nettest.MakePipe.
+// TODO: maybe a c1 <=> c2 switched version?
 func (pm pipeMaker) makePipe() (c1, c2 net.Conn, stop func(), err error) {
 	var secret Secret
 	if _, err := rand.Read(secret[:]); err != nil {
@@ -189,7 +190,25 @@ func (pm pipeMaker) makePipe() (c1, c2 net.Conn, stop func(), err error) {
 	clientTransport, serverTransport := net.Pipe()
 	client := Client(clientTransport, dCfg)
 	server := Server(serverTransport, lCfg)
-	return client, server, func() { client.Close(); server.Close() }, nil
+	stop = func() { client.Close(); server.Close() }
+
+	// We execute the handshake before returning the piped connections. Ideally the tests defined in
+	// nettest.TestConn would pass without this step. However, making this happen would require
+	// significant additional complexity which is probably not useful in practice. A pipe of
+	// tls.Conn instances would suffer from the same issues (and more), so we are in good company.
+
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		stop()
+		return nil, nil, nil, fmt.Errorf("client handshake error: %w", err)
+	}
+	if err := <-serverErr; err != nil {
+		stop()
+		return nil, nil, nil, fmt.Errorf("server handshake error: %w", err)
+	}
+
+	return client, server, stop, nil
 }
 
 // Used by TestIssue17
