@@ -170,7 +170,6 @@ func closeUnblockHelper(testClient bool) func(t *testing.T) {
 	}
 }
 
-// The ListenerConfig's DialOrigin function is not required; it will be filled in as needed.
 type pipeMaker struct {
 	t            *testing.T
 	originConfig *tls.Config
