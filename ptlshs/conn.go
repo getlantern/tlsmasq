@@ -115,7 +115,13 @@ func (c *clientConn) Write(b []byte) (n int, err error) {
 // be long-running or never return.
 func (c *clientConn) Handshake() error {
 	return c.shakeOnce.do(func() error {
-		return c.handshake()
+		handshakeErr := c.handshake()
+		if c.closeOnce.isDone() {
+			// c.handshake will exit early if the connection is closed, but sometimes with a
+			// seemingly unrelated error. It is easiest to just translate the error here.
+			return net.ErrClosed
+		}
+		return handshakeErr
 	})
 }
 
@@ -326,7 +332,13 @@ func (c *serverConn) Close() error {
 // be long-running or never return.
 func (c *serverConn) Handshake() error {
 	return c.shakeOnce.do(func() error {
-		return c.handshake()
+		handshakeErr := c.handshake()
+		if c.closeOnce.isDone() {
+			// c.handshake will exit early if the connection is closed, but sometimes with a
+			// seemingly unrelated error. It is easiest to just translate the error here.
+			return net.ErrClosed
+		}
+		return handshakeErr
 	})
 }
 
