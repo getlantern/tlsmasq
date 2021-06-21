@@ -208,7 +208,7 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, trans
 	for {
 		r := io.MultiReader(unprocessedBuf, conn)
 		recordData, unprocessed, err := tlsutil.ReadRecord(r, tlsState)
-		if unprocessed != nil {
+		if len(unprocessed) > 0 {
 			unprocessedBuf.prepend(unprocessed)
 		}
 		if err != nil {
