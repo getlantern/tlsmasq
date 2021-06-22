@@ -10,8 +10,6 @@ import (
 	"net"
 	"sync"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/getlantern/preconn"
 	"github.com/getlantern/tlsutil"
 )
@@ -471,8 +469,10 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 		return true
 	}
 
-	foundSignal := false
+	foundSignal := make(chan struct{})
 	signalFound := func(preSignal, postSignal []byte) {
+		close(foundSignal)
+
 		// We stop both copy routines by closing the connection to the origin server. We first
 		// attempt to flush any unprocessed data.
 		toOrigin.Write(preSignal)
@@ -482,7 +482,6 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 		// the client connection. Access to c.Conn is single-threaded until the handshake is
 		// complete, so this is safe to do without synchronization.
 		c.Conn = preconn.Wrap(c.Conn, postSignal)
-		foundSignal = true
 	}
 
 	rr := new(recordReader)
@@ -503,26 +502,28 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 	}
 
 	var (
-		g          = new(errgroup.Group)
-		gWaitErr   = make(chan error, 1)
 		client     = netReadWriter{mitm(toClient, onClientRead, nil)}
 		origin     = netReadWriter{toOrigin}
+		copyErr    = make(chan error, 2)
 		buf1, buf2 = make([]byte, bufferSize), make([]byte, bufferSize)
 	)
-	g.Go(func() error { _, err := io.CopyBuffer(client, origin, buf1); return err })
-	g.Go(func() error { _, err := io.CopyBuffer(origin, client, buf2); return err })
-	go func() { gWaitErr <- g.Wait() }()
+	go func() { _, err := io.CopyBuffer(client, origin, buf1); copyErr <- err }()
+	go func() { _, err := io.CopyBuffer(origin, client, buf2); copyErr <- err }()
+
 	select {
-	case err := <-gWaitErr:
-		switch {
-		case foundSignal:
+	case err := <-copyErr:
+		if isClosedChannel(foundSignal) {
 			return nil
-		case err != nil:
-			return err
-		default:
-			// If the copy routines returned before the signal, it means we hit EOF.
-			return io.EOF
 		}
+		// Some sort of error has occurred. Cancel I/O to ensure copy routines exit.
+		toClient.cancelIO()
+		toOrigin.cancelIO()
+		if err != nil {
+			return err
+		}
+		// We did not find the signal, but at least one side hit EOF.
+		return io.ErrUnexpectedEOF
+
 	case <-ctx.Done():
 		toClient.cancelIO()
 		toOrigin.cancelIO()
@@ -808,4 +809,14 @@ func (cond *once) do(f func() error) error {
 		close(cond.done)
 	})
 	return cond.err
+}
+
+// Assumes no value is ever sent on c.
+func isClosedChannel(c chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
 }
