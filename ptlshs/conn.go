@@ -218,6 +218,9 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, trans
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return io.ErrUnexpectedEOF
 			}
+			if !errors.As(err, new(tlsutil.DecryptError)) {
+				return err
+			}
 			// If we failed to decrypt, then this must not have been the signal.
 			processed := readBuf.Next(readBuf.Len() - unprocessedBuf.len())
 			transcriptHMAC.Write(processed)
