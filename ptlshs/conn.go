@@ -147,7 +147,7 @@ func (c *clientConn) handshake() error {
 	}
 	defer func() { transcriptDone = true }()
 
-	c.Conn = mitm(c.Conn, onClientRead, nil)
+	c.Conn = mitm(c.Conn, onClientRead, nil) // TODO: consider resetting c.Conn
 	hsResult, err := c.cfg.Handshaker.Handshake(c.Conn)
 	if err != nil {
 		return err
@@ -441,21 +441,20 @@ func (c *serverConn) handshake() error {
 	defer origin.Close()
 
 	transcriptHMAC := signalHMAC(c.cfg.Secret)
-	transcriptDone := false
+	originalWrapped := c.getWrapped()
 	onClientWrite := func(b []byte) error {
-		if !transcriptDone {
-			transcriptHMAC.Write(b)
-		}
+		transcriptHMAC.Write(b)
 		return nil
 	}
 	c.setWrapped(mitm(c.getWrapped(), nil, onClientWrite))
-	defer func() { transcriptDone = true }()
+	stopTranscript := func() { c.setWrapped(originalWrapped) }
+	defer stopTranscript() // may end up a no-op, but that's okay
 
 	// Read and copy ClientHello.
 	b, err := readClientHello(ctx, c.getWrapped(), listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Client sent something other than ClientHello. Proxy everything to match origin behavior.
-		transcriptDone = true
+		stopTranscript()
 		proxyUntilClose(ctx, preconn.Wrap(c.getWrapped(), b), origin)
 		return fmt.Errorf("did not receive ClientHello: %w", err)
 	}
@@ -471,7 +470,7 @@ func (c *serverConn) handshake() error {
 	b, c.state, err = readServerHello(ctx, origin, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Origin sent something other than ServerHello. Proxy everything to match origin behavior.
-		transcriptDone = true
+		stopTranscript()
 		proxyUntilClose(ctx, c.getWrapped(), preconn.Wrap(origin, b))
 		return fmt.Errorf("did not receive ServerHello: %w", err)
 	}
@@ -494,7 +493,6 @@ func (c *serverConn) handshake() error {
 	}
 
 	// Send our own completion signal.
-	transcriptDone = true
 	signal, err := newServerSignal(transcriptHMAC.Sum(nil))
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
