@@ -8,7 +8,9 @@ import (
 	"hash"
 	"io"
 	"net"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/getlantern/preconn"
 	"github.com/getlantern/tlsutil"
@@ -289,6 +291,10 @@ type serverConn struct {
 	state *connState
 
 	shakeOnce, closeOnce *once
+
+	// Only used prior to and during the handshake.
+	hsReadDeadline, hsWriteDeadline deadline
+	deadlinesLock                   sync.Mutex
 }
 
 // Server initializes a server-side connection.
@@ -300,21 +306,37 @@ func Server(toClient net.Conn, cfg ListenerConfig) Conn {
 
 // Ignores cfg.NonceSweepInterval.
 func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
-	return &serverConn{toClient, cfg, cache, closeCache, nil, newOnce(), newOnce()}
+	return &serverConn{
+		toClient, cfg, cache, closeCache, nil,
+		newOnce(), newOnce(), newDeadline(), newDeadline(), sync.Mutex{}}
 }
 
 func (c *serverConn) Read(b []byte) (n int, err error) {
-	if err := c.Handshake(); err != nil {
-		return 0, fmt.Errorf("handshake failed: %w", err)
+	handshakeErr := make(chan error, 1)
+	go func() { handshakeErr <- c.Handshake() }()
+	select {
+	case err := <-handshakeErr:
+		if err != nil {
+			return 0, fmt.Errorf("handshake failed: %w", err)
+		}
+		return c.Conn.Read(b)
+	case <-c.hsReadDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
 	}
-	return c.Conn.Read(b)
 }
 
 func (c *serverConn) Write(b []byte) (n int, err error) {
-	if err := c.Handshake(); err != nil {
-		return 0, fmt.Errorf("handshake failed: %w", err)
+	handshakeErr := make(chan error, 1)
+	go func() { handshakeErr <- c.Handshake() }()
+	select {
+	case err := <-handshakeErr:
+		if err != nil {
+			return 0, fmt.Errorf("handshake failed: %w", err)
+		}
+		return c.Conn.Write(b)
+	case <-c.hsWriteDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
 	}
-	return c.Conn.Write(b)
 }
 
 func (c *serverConn) Close() error {
@@ -324,6 +346,41 @@ func (c *serverConn) Close() error {
 		}
 		return c.Conn.Close()
 	})
+}
+
+func (c *serverConn) SetDeadline(t time.Time) error {
+	c.deadlinesLock.Lock()
+	defer c.deadlinesLock.Unlock()
+
+	// n.b. If one deadline is closed, so is the other.
+	if !c.hsReadDeadline.isClosed() {
+		c.hsReadDeadline.set(t)
+		c.hsWriteDeadline.set(t)
+		return nil
+	}
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *serverConn) SetReadDeadline(t time.Time) error {
+	c.deadlinesLock.Lock()
+	defer c.deadlinesLock.Unlock()
+
+	if !c.hsReadDeadline.isClosed() {
+		c.hsReadDeadline.set(t)
+		return nil
+	}
+	return c.Conn.SetReadDeadline(t)
+}
+
+func (c *serverConn) SetWriteDeadline(t time.Time) error {
+	c.deadlinesLock.Lock()
+	defer c.deadlinesLock.Unlock()
+
+	if !c.hsWriteDeadline.isClosed() {
+		c.hsWriteDeadline.set(t)
+		return nil
+	}
+	return c.Conn.SetWriteDeadline(t)
 }
 
 // Handshake performs the ptlshs handshake protocol, if it has not yet been performed. Note that,
@@ -426,6 +483,14 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}
+
+	// Transfer handshake deadlines to the underlying connection.
+	c.deadlinesLock.Lock()
+	c.Conn.SetReadDeadline(c.hsReadDeadline.get())
+	c.Conn.SetWriteDeadline(c.hsWriteDeadline.get())
+	c.hsReadDeadline.close()
+	c.hsWriteDeadline.close()
+	c.deadlinesLock.Unlock()
 
 	return nil
 }
@@ -790,25 +855,25 @@ func newOnce() *once {
 	return &once{done: make(chan struct{})}
 }
 
-func (cond *once) wait() {
-	<-cond.done
+func (o *once) wait() {
+	<-o.done
 }
 
-func (cond *once) isDone() bool {
+func (o *once) isDone() bool {
 	select {
-	case <-cond.done:
+	case <-o.done:
 		return true
 	default:
 		return false
 	}
 }
 
-func (cond *once) do(f func() error) error {
-	cond.once.Do(func() {
-		cond.err = f()
-		close(cond.done)
+func (o *once) do(f func() error) error {
+	o.once.Do(func() {
+		o.err = f()
+		close(o.done)
 	})
-	return cond.err
+	return o.err
 }
 
 // Assumes no value is ever sent on c.
