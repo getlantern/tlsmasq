@@ -280,7 +280,8 @@ func (c *clientConn) Close() error {
 
 type serverConn struct {
 	// The underlying connection to the client. This is likely just a TCP connection.
-	net.Conn
+	wrapped     net.Conn
+	wrappedLock sync.RWMutex
 
 	cfg ListenerConfig
 
@@ -307,8 +308,20 @@ func Server(toClient net.Conn, cfg ListenerConfig) Conn {
 // Ignores cfg.NonceSweepInterval.
 func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
 	return &serverConn{
-		toClient, cfg, cache, closeCache, nil,
+		toClient, sync.RWMutex{}, cfg, cache, closeCache, nil,
 		newOnce(), newOnce(), newDeadline(), newDeadline(), sync.Mutex{}}
+}
+
+func (c *serverConn) getWrapped() net.Conn {
+	c.wrappedLock.RLock()
+	defer c.wrappedLock.RUnlock()
+	return c.wrapped
+}
+
+func (c *serverConn) setWrapped(conn net.Conn) {
+	c.wrappedLock.Lock()
+	c.wrapped = conn
+	c.wrappedLock.Unlock()
 }
 
 func (c *serverConn) Read(b []byte) (n int, err error) {
@@ -319,7 +332,7 @@ func (c *serverConn) Read(b []byte) (n int, err error) {
 		if err != nil {
 			return 0, fmt.Errorf("handshake failed: %w", err)
 		}
-		return c.Conn.Read(b)
+		return c.getWrapped().Read(b)
 	case <-c.hsReadDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
 	}
@@ -333,7 +346,7 @@ func (c *serverConn) Write(b []byte) (n int, err error) {
 		if err != nil {
 			return 0, fmt.Errorf("handshake failed: %w", err)
 		}
-		return c.Conn.Write(b)
+		return c.getWrapped().Write(b)
 	case <-c.hsWriteDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
 	}
@@ -344,7 +357,7 @@ func (c *serverConn) Close() error {
 		if c.closeCache {
 			c.nonceCache.close()
 		}
-		return c.Conn.Close()
+		return c.getWrapped().Close()
 	})
 }
 
@@ -358,7 +371,7 @@ func (c *serverConn) SetDeadline(t time.Time) error {
 		c.hsWriteDeadline.set(t)
 		return nil
 	}
-	return c.Conn.SetDeadline(t)
+	return c.getWrapped().SetDeadline(t)
 }
 
 func (c *serverConn) SetReadDeadline(t time.Time) error {
@@ -369,7 +382,7 @@ func (c *serverConn) SetReadDeadline(t time.Time) error {
 		c.hsReadDeadline.set(t)
 		return nil
 	}
-	return c.Conn.SetReadDeadline(t)
+	return c.getWrapped().SetReadDeadline(t)
 }
 
 func (c *serverConn) SetWriteDeadline(t time.Time) error {
@@ -380,7 +393,15 @@ func (c *serverConn) SetWriteDeadline(t time.Time) error {
 		c.hsWriteDeadline.set(t)
 		return nil
 	}
-	return c.Conn.SetWriteDeadline(t)
+	return c.getWrapped().SetWriteDeadline(t)
+}
+
+func (c *serverConn) LocalAddr() net.Addr {
+	return c.getWrapped().LocalAddr()
+}
+
+func (c *serverConn) RemoteAddr() net.Addr {
+	return c.getWrapped().RemoteAddr()
 }
 
 // Handshake performs the ptlshs handshake protocol, if it has not yet been performed. Note that,
@@ -427,15 +448,15 @@ func (c *serverConn) handshake() error {
 		}
 		return nil
 	}
-	c.Conn = mitm(c.Conn, nil, onClientWrite)
+	c.setWrapped(mitm(c.getWrapped(), nil, onClientWrite))
 	defer func() { transcriptDone = true }()
 
 	// Read and copy ClientHello.
-	b, err := readClientHello(ctx, c.Conn, listenerReadBufferSize)
+	b, err := readClientHello(ctx, c.getWrapped(), listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Client sent something other than ClientHello. Proxy everything to match origin behavior.
 		transcriptDone = true
-		proxyUntilClose(ctx, preconn.Wrap(c.Conn, b), origin)
+		proxyUntilClose(ctx, preconn.Wrap(c.getWrapped(), b), origin)
 		return fmt.Errorf("did not receive ClientHello: %w", err)
 	}
 	if err != nil {
@@ -451,7 +472,7 @@ func (c *serverConn) handshake() error {
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Origin sent something other than ServerHello. Proxy everything to match origin behavior.
 		transcriptDone = true
-		proxyUntilClose(ctx, c.Conn, preconn.Wrap(origin, b))
+		proxyUntilClose(ctx, c.getWrapped(), preconn.Wrap(origin, b))
 		return fmt.Errorf("did not receive ServerHello: %w", err)
 	}
 	if err != nil {
@@ -462,7 +483,7 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
 	}
-	_, err = makeNetworkCall(c.Conn.Write, b)
+	_, err = makeNetworkCall(c.getWrapped().Write, b)
 	if err != nil {
 		return fmt.Errorf("failed to write to client: %w", err)
 	}
@@ -479,15 +500,15 @@ func (c *serverConn) handshake() error {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
 
-	_, err = tlsutil.WriteRecord(c.Conn, *signal, tlsState)
+	_, err = tlsutil.WriteRecord(c.getWrapped(), *signal, tlsState)
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}
 
 	// Transfer handshake deadlines to the underlying connection.
 	c.deadlinesLock.Lock()
-	c.Conn.SetReadDeadline(c.hsReadDeadline.get())
-	c.Conn.SetWriteDeadline(c.hsWriteDeadline.get())
+	c.getWrapped().SetReadDeadline(c.hsReadDeadline.get())
+	c.getWrapped().SetWriteDeadline(c.hsWriteDeadline.get())
 	c.hsReadDeadline.close()
 	c.hsWriteDeadline.close()
 	c.deadlinesLock.Unlock()
@@ -506,7 +527,7 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 	// state. If we see the signal, we close the connection with the origin. Otherwise, we continue
 	// to proxy.
 
-	toClient, toOrigin := newCancelConn(c.Conn), newCancelConn(originConn)
+	toClient, toOrigin := newCancelConn(c.getWrapped()), newCancelConn(originConn)
 
 	nonFatalError := func(err error) {
 		select {
@@ -546,7 +567,7 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 		// We also need to ensure the unprocessed post-signal data is not lost. We prepend it to
 		// the client connection. Access to c.Conn is single-threaded until the handshake is
 		// complete, so this is safe to do without synchronization.
-		c.Conn = preconn.Wrap(c.Conn, postSignal)
+		c.setWrapped(preconn.Wrap(c.getWrapped(), postSignal))
 	}
 
 	rr := new(recordReader)

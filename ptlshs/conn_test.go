@@ -97,7 +97,7 @@ func TestIssue17(t *testing.T) {
 	require.NoError(t, err)
 
 	conn := &serverConn{
-		Conn:       serverTransport,
+		wrapped:    serverTransport,
 		nonceCache: newNonceCache(time.Hour),
 	}
 	require.NoError(t,
