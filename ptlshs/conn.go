@@ -441,9 +441,12 @@ func (c *serverConn) handshake() error {
 	defer origin.Close()
 
 	transcriptHMAC := signalHMAC(c.cfg.Secret)
+	transcriptLock := new(sync.Mutex)
 	originalWrapped := c.getWrapped()
 	onClientWrite := func(b []byte) error {
+		transcriptLock.Lock()
 		transcriptHMAC.Write(b)
+		transcriptLock.Unlock()
 		return nil
 	}
 	c.setWrapped(mitm(c.getWrapped(), nil, onClientWrite))
@@ -493,7 +496,9 @@ func (c *serverConn) handshake() error {
 	}
 
 	// Send our own completion signal.
+	transcriptLock.Lock()
 	signal, err := newServerSignal(transcriptHMAC.Sum(nil))
+	transcriptLock.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
