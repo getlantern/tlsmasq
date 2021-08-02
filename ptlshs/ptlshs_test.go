@@ -2,6 +2,7 @@ package ptlshs
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"fmt"
@@ -27,23 +28,7 @@ func TestListenAndDial(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
-	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
-
-	originErr := make(chan error, 1)
-	go func() {
-		originErr <- func() error {
-			conn, err := origin.Accept()
-			if err != nil {
-				return fmt.Errorf("accept error: %w", err)
-			}
-			if err := conn.(*tls.Conn).Handshake(); err != nil {
-				return fmt.Errorf("handshake error: %w", err)
-			}
-			return nil
-		}()
-	}()
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
@@ -51,7 +36,7 @@ func TestListenAndDial(t *testing.T) {
 		},
 		Secret: secret,
 	}
-	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
@@ -103,7 +88,6 @@ func TestListenAndDial(t *testing.T) {
 	if allPassed(
 		assert.NoError(t, dialErr),
 		assert.NoError(t, <-listenerErr),
-		assert.NoError(t, <-originErr),
 	) {
 		assert.Equal(t, clientMsg, <-rcvdClientMsg)
 		assert.Equal(t, serverMsg, rcvdServerMsg)
@@ -118,27 +102,7 @@ func TestSessionResumption(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
-	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
-
-	originErr := make(chan error, 1)
-	go func() {
-		originErr <- func() error {
-			for i := 0; i < 2; i++ {
-				conn, err := origin.Accept()
-				if err != nil {
-					return fmt.Errorf("accept error for connection %d: %w", i, err)
-				}
-				defer conn.Close()
-				if err := conn.(*tls.Conn).Handshake(); err != nil {
-					return fmt.Errorf("handshake error for connection %d: %w", i, err)
-				}
-			}
-			return nil
-		}()
-	}()
-
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 	handshaker := &resumptionCheckingHandshaker{
 		Config: &tls.Config{
 			InsecureSkipVerify: true,
@@ -147,7 +111,7 @@ func TestSessionResumption(t *testing.T) {
 		},
 	}
 	dialerCfg := DialerConfig{secret, handshaker, 0}
-	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
@@ -201,7 +165,6 @@ func TestSessionResumption(t *testing.T) {
 	if allPassed(
 		assert.NoError(t, dialErr),
 		assert.NoError(t, <-listenerErr),
-		assert.NoError(t, <-originErr),
 	) {
 		require.True(t, handshaker.resumedLastHandshake)
 	}
@@ -218,30 +181,13 @@ func TestSignalReplay(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
-	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
-
-	originErr := make(chan error, 1)
-	go func() {
-		originErr <- func() error {
-			for i := 0; i < 2; i++ {
-				conn, err := origin.Accept()
-				if err != nil {
-					return fmt.Errorf("accept error for connection %d: %w", i, err)
-				}
-				defer conn.Close()
-
-				if err := conn.(*tls.Conn).Handshake(); err != nil {
-					return fmt.Errorf("handshake error for connection %d: %w", i, err)
-				}
-				if _, err = conn.Write([]byte(originMsg)); err != nil {
-					return fmt.Errorf("write error for connection %d: %w", i, err)
-				}
-			}
-			return nil
-		}()
-	}()
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin.DoPostHandshake(func(conn net.Conn) error {
+		if _, err := conn.Write([]byte(originMsg)); err != nil {
+			return fmt.Errorf("write error %v", err)
+		}
+		return nil
+	})
 
 	// We capture the encrypted signal by watching the bytes going in and out of the server. We use
 	// some knowledge of the protocol and secret to identify the signal, but this could conceivably
@@ -307,7 +253,7 @@ func TestSignalReplay(t *testing.T) {
 	_l, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 
-	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 	l := WrapListener(mitmListener{_l, onServerRead, onServerWrite}, listenerCfg)
 	defer l.Close()
 
@@ -319,6 +265,8 @@ func TestSignalReplay(t *testing.T) {
 				if err != nil {
 					return fmt.Errorf("accept error for connection %d: %w", i, err)
 				}
+				// Ensure blocked I/O is cleaned up.
+				t.Cleanup(func() { conn.Close() })
 				go func() {
 					// Try to write, but don't check for write errors. This message will only make it to
 					// the client if our replay detection is broken. We would see it in a check below.
@@ -374,7 +322,6 @@ func TestSignalReplay(t *testing.T) {
 	if allPassed(
 		assert.NoError(t, dialErr),
 		assert.NoError(t, <-listenerErr),
-		assert.NoError(t, <-originErr),
 	) {
 		require.Equal(t, originMsg, rcvdFromOrigin)
 	}
@@ -393,27 +340,13 @@ func TestPostHandshakeData(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
-	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
-
-	originErr := make(chan error, 1)
-	go func() {
-		originErr <- func() error {
-			conn, err := origin.Accept()
-			if err != nil {
-				return fmt.Errorf("accept error: %w", err)
-			}
-			if err := conn.(*tls.Conn).Handshake(); err != nil {
-				return fmt.Errorf("handshake error: %w", err)
-			}
-			// Immediately send some data.
-			if _, err := conn.Write([]byte("some nonsense from the origin")); err != nil {
-				return fmt.Errorf("write error: %w", err)
-			}
-			return nil
-		}()
-	}()
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin.DoPostHandshake(func(conn net.Conn) error {
+		if _, err := conn.Write([]byte("some nonsense from the origin")); err != nil {
+			return fmt.Errorf("write error: %w", err)
+		}
+		return nil
+	})
 
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
@@ -424,7 +357,7 @@ func TestPostHandshakeData(t *testing.T) {
 		},
 		Secret: secret,
 	}
-	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
 	require.NoError(t, err)
@@ -476,7 +409,6 @@ func TestPostHandshakeData(t *testing.T) {
 	if allPassed(
 		assert.NoError(t, dialErr),
 		assert.NoError(t, <-listenerErr),
-		assert.NoError(t, <-originErr),
 	) {
 		assert.Equal(t, clientMsg, <-rcvdFromClient)
 		// This is where we would see the unexpected data from the origin (wrapped in a TLS record).
@@ -512,32 +444,14 @@ func TestPostHandshakeInjection(t *testing.T) {
 		tls.VersionTLS12, tls.TLS_CHACHA20_POLY1305_SHA256, injectorSecret, injectorIV, injectorSeq)
 	require.NoError(t, err)
 
-	origin, err := tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
-	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
-
-	originErr := make(chan error, 1)
-	go func() {
-		originErr <- func() error {
-			conn, err := origin.Accept()
-			if err != nil {
-				return fmt.Errorf("accept error: %w", err)
-			}
-			defer conn.Close()
-			if err := conn.(*tls.Conn).Handshake(); err != nil {
-				return fmt.Errorf("handshake error: %w", err)
-			}
-			return nil
-		}()
-	}()
-
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
 			Config: &tls.Config{InsecureSkipVerify: true},
 		},
 		Secret: secret,
 	}
-	listenerCfg := ListenerConfig{DialOrigin: dialOrigin, Secret: secret}
+	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
 	_client, _server := testutil.BufferedPipe()
 
@@ -625,7 +539,6 @@ func TestPostHandshakeInjection(t *testing.T) {
 
 	assert.Error(t, client.Handshake())
 	assert.NoError(t, <-serverErr)
-	assert.NoError(t, <-originErr)
 }
 
 // TestProgressionToProxy ensures that the proxied connection continues if the client never sends
@@ -663,7 +576,9 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 	origin, err := listen()
 	require.NoError(t, err)
-	dialOrigin := func() (net.Conn, error) { return net.Dial("tcp", origin.Addr().String()) }
+	dialOrigin := func(context.Context) (net.Conn, error) {
+		return net.Dial("tcp", origin.Addr().String())
+	}
 
 	rcvdFromClient := make(chan string, 1)
 	originErr := make(chan error, 1)
@@ -700,15 +615,15 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 
 	// We expect the Handshake function to run for the duration of the test as it is serving as a
 	// proxy to the origin.
-	logger := newSafeLogger(t)
+	logger := testutil.NewSafeLogger(t)
 	go func() {
 		conn, err := l.Accept()
 		if err != nil {
-			logger.logf("listener accept error: %v", err)
+			logger.Logf("listener accept error: %v", err)
 			return
 		}
 		if err := conn.(Conn).Handshake(); err != nil {
-			logger.logf("listener handshake error: %v", err)
+			logger.Logf("listener handshake error: %v", err)
 			return
 		}
 	}()
@@ -772,31 +687,6 @@ func (h *resumptionCheckingHandshaker) Handshake(conn net.Conn) (*HandshakeResul
 	return &HandshakeResult{
 		tlsConn.ConnectionState().Version, tlsConn.ConnectionState().CipherSuite,
 	}, nil
-}
-
-type safeTestLogger struct {
-	sync.Mutex
-	testComplete bool
-	t            *testing.T
-}
-
-func newSafeLogger(t *testing.T) *safeTestLogger {
-	l := &safeTestLogger{t: t}
-	t.Cleanup(func() {
-		l.Lock()
-		l.testComplete = true
-		l.Unlock()
-	})
-	return l
-}
-
-func (l *safeTestLogger) logf(format string, a ...interface{}) {
-	l.Lock()
-	defer l.Unlock()
-	if l.testComplete {
-		return
-	}
-	l.t.Logf(format, a...)
 }
 
 // Intended to be used with testify/assert. For example:

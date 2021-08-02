@@ -3,7 +3,6 @@ package tlsmasq
 import (
 	"crypto/rand"
 	"crypto/tls"
-	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,10 +34,7 @@ func TestHandshake(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	serverToOrigin, originToServer := testutil.BufferedPipe()
-	proxiedConn := tls.Server(originToServer, tlsCfg)
-	go proxiedConn.Handshake()
-
+	origin := testutil.StartOrigin(t, tlsCfg)
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := Client(clientTransport, DialerConfig{
 		TLSConfig: tlsCfg,
@@ -52,10 +48,8 @@ func TestHandshake(t *testing.T) {
 	serverConn := Server(serverTransport, ListenerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
-			DialOrigin: func() (net.Conn, error) {
-				return serverToOrigin, nil
-			},
-			Secret: secret,
+			DialOrigin: origin.DialContext,
+			Secret:     secret,
 		},
 	})
 	defer serverConn.Close()
