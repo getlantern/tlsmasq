@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsmasq/ptlshs"
+	"github.com/getlantern/transports/pluggable"
+	"github.com/getlantern/transports/pttls"
+	"github.com/getlantern/transports/yamltypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,4 +102,57 @@ func TestListenAndDial(t *testing.T) {
 	assert.NoError(t, <-serverErr)
 	assert.Equal(t, clientMsg, <-msgFromClient)
 	assert.Equal(t, serverMsg, msgFromServer)
+}
+
+func TestTransport(t *testing.T) {
+	s := ptlshs.Secret{}
+	_, err := rand.Read(s[:])
+	require.NoError(t, err)
+
+	o := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+
+	pluggable.TestTransport(
+		t, Transport{},
+		&tlsmasqListenerConfig{
+			CommonListenerConfig: pluggable.CommonListenerConfig{
+				Addr: "localhost:0",
+			},
+			OriginAddr:    o.Addr().String(),
+			Secret:        yamltypes.NewBytes(s[:]),
+			TLSMinVersion: yamltypes.NewUint16(tls.VersionTLS12),
+			TLSSuites: yamltypes.NewUint16Slice([]uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+			}),
+		},
+		func(listenerAddr string) interface{} {
+			return &tlsmasqDialerConfig{
+				CommonDialerConfig: pluggable.CommonDialerConfig{
+					Addr: listenerAddr,
+				},
+				CommonTLSConfig: pttls.CommonTLSConfig{
+					CertPEM:             string(certPem),
+					ServerNameIndicator: "localhost",
+					ClientHelloID:       "HelloChrome_Auto",
+					DesktopOrderedCipherSuiteNames: []string{
+						"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+						"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+						"TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
+						"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305",
+					},
+				},
+				Secret:        yamltypes.NewBytes(s[:]),
+				NonceTTL:      time.Hour,
+				TLSMinVersion: yamltypes.NewUint16(tls.VersionTLS12),
+				TLSSuites: yamltypes.NewUint16Slice([]uint16{
+					tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+					tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+					tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+					tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+				}),
+			}
+		},
+	)
 }
