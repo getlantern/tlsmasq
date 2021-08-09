@@ -591,8 +591,8 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 	}
 
 	var (
-		client     = netReadWriter{mitm(toClient, onClientRead, nil)}
-		origin     = netReadWriter{toOrigin}
+		client     = mitm(toClient, onClientRead, nil)
+		origin     = toOrigin
 		copyErr    = make(chan error, 2)
 		buf1, buf2 = make([]byte, bufferSize), make([]byte, bufferSize)
 	)
@@ -601,12 +601,12 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 
 	select {
 	case err := <-copyErr:
+		// Cancel I/O to ensure copy routines exit.
+		toClient.cancelIO()
+		toOrigin.cancelIO()
 		if isClosedChannel(foundSignal) {
 			return nil
 		}
-		// Some sort of error has occurred. Cancel I/O to ensure copy routines exit.
-		toClient.cancelIO()
-		toOrigin.cancelIO()
 		if err != nil {
 			return err
 		}
@@ -793,19 +793,6 @@ func (c mitmConn) Write(b []byte) (n int, err error) {
 		}
 	}
 	return
-}
-
-// Wraps the input io.ReadWriter such that Reads and Writes will be retried on temporary errors.
-type netReadWriter struct {
-	rw io.ReadWriter
-}
-
-func (nrw netReadWriter) Read(b []byte) (n int, err error) {
-	return makeNetworkCall(nrw.rw.Read, b)
-}
-
-func (nrw netReadWriter) Write(b []byte) (n int, err error) {
-	return makeNetworkCall(nrw.rw.Write, b)
 }
 
 // Make a network call, ignoring temporary errors.
