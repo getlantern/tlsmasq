@@ -464,7 +464,7 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to read ClientHello: %w", err)
 	}
-	_, err = makeNetworkCall(origin.Write, b)
+	_, err = origin.Write(b)
 	if err != nil {
 		return fmt.Errorf("failed to write to origin: %w", err)
 	}
@@ -485,7 +485,7 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
 	}
-	_, err = makeNetworkCall(c.getWrapped().Write, b)
+	_, err = c.getWrapped().Write(b)
 	if err != nil {
 		return fmt.Errorf("failed to write to client: %w", err)
 	}
@@ -666,7 +666,7 @@ func readClientHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 	)
 	readHello := func() error {
 		for {
-			n, err := makeNetworkCall(_conn.Read, buf)
+			n, err := _conn.Read(buf)
 			if err != nil {
 				return networkError{err}
 			}
@@ -711,7 +711,7 @@ func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 	)
 	readHello := func() result {
 		for {
-			n, err := makeNetworkCall(_conn.Read, buf)
+			n, err := _conn.Read(buf)
 			if err != nil {
 				return result{nil, networkError{err}}
 			}
@@ -793,19 +793,6 @@ func (c mitmConn) Write(b []byte) (n int, err error) {
 		}
 	}
 	return
-}
-
-// Make a network call, ignoring temporary errors.
-func makeNetworkCall(networkFn func([]byte) (int, error), buf []byte) (int, error) {
-	for {
-		n, err := networkFn(buf)
-		if err == nil {
-			return n, nil
-		}
-		if netErr, ok := err.(net.Error); !ok || !netErr.Temporary() {
-			return n, err
-		}
-	}
 }
 
 // Different than a net.Error. Used only to distinguish network errors from protocol-level errors.
