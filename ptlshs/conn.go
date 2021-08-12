@@ -147,7 +147,10 @@ func (c *clientConn) handshake() error {
 	}
 	defer func() { transcriptDone = true }()
 
-	c.Conn = mitm(c.Conn, onClientRead, nil) // TODO: consider resetting c.Conn
+	originalConn := c.Conn
+	c.Conn = mitm(c.Conn, onClientRead, nil)
+	defer func() { c.Conn = originalConn }()
+
 	hsResult, err := c.cfg.Handshaker.Handshake(c.Conn)
 	if err != nil {
 		return err
