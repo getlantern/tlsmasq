@@ -604,9 +604,15 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 
 	select {
 	case err := <-copyErr:
-		// Cancel I/O to ensure copy routines exit.
+		// Cancel I/O, then wait for a second value to be sent on copyErr to ensure both copy
+		// routines have exited.
 		toClient.cancelIO()
 		toOrigin.cancelIO()
+		select {
+		case <-copyErr:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		if isClosedChannel(foundSignal) {
 			return nil
 		}
