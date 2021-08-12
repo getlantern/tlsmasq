@@ -453,7 +453,9 @@ func TestPostHandshakeInjection(t *testing.T) {
 	}
 	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
-	_client, _server := testutil.BufferedPipe()
+	// n.b. We can't use testutil.BufferedPipe here as the asynchronous writes interact poorly with
+	// cancelConn.
+	_client, _server := net.Pipe()
 
 	// When we see the client signal, we block the server's read and inject garbage into the client
 	// side of the connection.
