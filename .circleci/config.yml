@@ -14,8 +14,8 @@ jobs:
       - run:
           name: Test
           # We have a lot of concurrency and synchronization in this library. Test with -race and
-          # -count=1000 to expose any timing related bugs.
-          command: go test -race -count=1000 -v ./...
+          # -count=100 to expose any timing related bugs.
+          command: go test -race -count=100 -v ./...
 
 workflows:
     version: 2

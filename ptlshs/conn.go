@@ -8,9 +8,9 @@ import (
 	"hash"
 	"io"
 	"net"
+	"os"
 	"sync"
-
-	"golang.org/x/sync/errgroup"
+	"time"
 
 	"github.com/getlantern/preconn"
 	"github.com/getlantern/tlsutil"
@@ -96,14 +96,14 @@ func Client(toServer net.Conn, cfg DialerConfig) Conn {
 
 func (c *clientConn) Read(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
-		return 0, fmt.Errorf("handshake failed: %w", err)
+		return 0, wrapError("handshake failed", err)
 	}
 	return c.Conn.Read(b)
 }
 
 func (c *clientConn) Write(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
-		return 0, fmt.Errorf("handshake failed: %w", err)
+		return 0, wrapError("handshake failed", err)
 	}
 	return c.Conn.Write(b)
 }
@@ -115,7 +115,13 @@ func (c *clientConn) Write(b []byte) (n int, err error) {
 // be long-running or never return.
 func (c *clientConn) Handshake() error {
 	return c.shakeOnce.do(func() error {
-		return c.handshake()
+		handshakeErr := c.handshake()
+		if c.closeOnce.isDone() {
+			// c.handshake will exit early if the connection is closed, but sometimes with a
+			// seemingly unrelated error. It is easiest to just translate the error here.
+			return net.ErrClosed
+		}
+		return handshakeErr
 	})
 }
 
@@ -141,13 +147,16 @@ func (c *clientConn) handshake() error {
 	}
 	defer func() { transcriptDone = true }()
 
+	originalConn := c.Conn
 	c.Conn = mitm(c.Conn, onClientRead, nil)
+	defer func() { c.Conn = originalConn }()
+
 	hsResult, err := c.cfg.Handshaker.Handshake(c.Conn)
 	if err != nil {
 		return err
 	}
 	if serverRandom == nil {
-		return fmt.Errorf("never saw server hello")
+		return errors.New("never saw server hello")
 	}
 	seq, iv, err := deriveSeqAndIV(serverRandom)
 	if err != nil {
@@ -163,12 +172,12 @@ func (c *clientConn) handshake() error {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
 	if _, err = tlsutil.WriteRecord(c.Conn, *signal, tlsState); err != nil {
-		return fmt.Errorf("failed to signal completion: %w", err)
+		return wrapError("failed to signal completion", err)
 	}
 	// The watchForCompletionFunction needs direct control over what is written to the transcript.
 	transcriptDone = true
 	if err := c.watchForCompletion(tlsState, transcriptHMAC); err != nil {
-		return fmt.Errorf("error watching for server completion signal: %w", err)
+		return wrapError("error watching for server completion signal", err)
 	}
 	// We're overwriting concurrently accessed fields here. However, these are not used concurrently
 	// until the handshake is complete.
@@ -202,7 +211,7 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, trans
 	for {
 		r := io.MultiReader(unprocessedBuf, conn)
 		recordData, unprocessed, err := tlsutil.ReadRecord(r, tlsState)
-		if unprocessed != nil {
+		if len(unprocessed) > 0 {
 			unprocessedBuf.prepend(unprocessed)
 		}
 		if err != nil {
@@ -211,6 +220,9 @@ func (c *clientConn) watchForCompletion(tlsState *tlsutil.ConnectionState, trans
 			}
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return io.ErrUnexpectedEOF
+			}
+			if !errors.As(err, new(tlsutil.DecryptError)) {
+				return err
 			}
 			// If we failed to decrypt, then this must not have been the signal.
 			processed := readBuf.Next(readBuf.Len() - unprocessedBuf.len())
@@ -271,7 +283,8 @@ func (c *clientConn) Close() error {
 
 type serverConn struct {
 	// The underlying connection to the client. This is likely just a TCP connection.
-	net.Conn
+	wrapped     net.Conn
+	wrappedLock sync.RWMutex
 
 	cfg ListenerConfig
 
@@ -282,6 +295,10 @@ type serverConn struct {
 	state *connState
 
 	shakeOnce, closeOnce *once
+
+	// Only used prior to and during the handshake.
+	hsReadDeadline, hsWriteDeadline deadline
+	deadlinesLock                   sync.Mutex
 }
 
 // Server initializes a server-side connection.
@@ -293,21 +310,49 @@ func Server(toClient net.Conn, cfg ListenerConfig) Conn {
 
 // Ignores cfg.NonceSweepInterval.
 func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
-	return &serverConn{toClient, cfg, cache, closeCache, nil, newOnce(), newOnce()}
+	return &serverConn{
+		toClient, sync.RWMutex{}, cfg, cache, closeCache, nil,
+		newOnce(), newOnce(), newDeadline(), newDeadline(), sync.Mutex{}}
+}
+
+func (c *serverConn) getWrapped() net.Conn {
+	c.wrappedLock.RLock()
+	defer c.wrappedLock.RUnlock()
+	return c.wrapped
+}
+
+func (c *serverConn) setWrapped(conn net.Conn) {
+	c.wrappedLock.Lock()
+	c.wrapped = conn
+	c.wrappedLock.Unlock()
 }
 
 func (c *serverConn) Read(b []byte) (n int, err error) {
-	if err := c.Handshake(); err != nil {
-		return 0, fmt.Errorf("handshake failed: %w", err)
+	handshakeErr := make(chan error, 1)
+	go func() { handshakeErr <- c.Handshake() }()
+	select {
+	case err := <-handshakeErr:
+		if err != nil {
+			return 0, fmt.Errorf("handshake failed: %w", err)
+		}
+		return c.getWrapped().Read(b)
+	case <-c.hsReadDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
 	}
-	return c.Conn.Read(b)
 }
 
 func (c *serverConn) Write(b []byte) (n int, err error) {
-	if err := c.Handshake(); err != nil {
-		return 0, fmt.Errorf("handshake failed: %w", err)
+	handshakeErr := make(chan error, 1)
+	go func() { handshakeErr <- c.Handshake() }()
+	select {
+	case err := <-handshakeErr:
+		if err != nil {
+			return 0, fmt.Errorf("handshake failed: %w", err)
+		}
+		return c.getWrapped().Write(b)
+	case <-c.hsWriteDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
 	}
-	return c.Conn.Write(b)
 }
 
 func (c *serverConn) Close() error {
@@ -315,8 +360,51 @@ func (c *serverConn) Close() error {
 		if c.closeCache {
 			c.nonceCache.close()
 		}
-		return c.Conn.Close()
+		return c.getWrapped().Close()
 	})
+}
+
+func (c *serverConn) SetDeadline(t time.Time) error {
+	c.deadlinesLock.Lock()
+	defer c.deadlinesLock.Unlock()
+
+	// n.b. If one deadline is closed, so is the other.
+	if !c.hsReadDeadline.isClosed() {
+		c.hsReadDeadline.set(t)
+		c.hsWriteDeadline.set(t)
+		return nil
+	}
+	return c.getWrapped().SetDeadline(t)
+}
+
+func (c *serverConn) SetReadDeadline(t time.Time) error {
+	c.deadlinesLock.Lock()
+	defer c.deadlinesLock.Unlock()
+
+	if !c.hsReadDeadline.isClosed() {
+		c.hsReadDeadline.set(t)
+		return nil
+	}
+	return c.getWrapped().SetReadDeadline(t)
+}
+
+func (c *serverConn) SetWriteDeadline(t time.Time) error {
+	c.deadlinesLock.Lock()
+	defer c.deadlinesLock.Unlock()
+
+	if !c.hsWriteDeadline.isClosed() {
+		c.hsWriteDeadline.set(t)
+		return nil
+	}
+	return c.getWrapped().SetWriteDeadline(t)
+}
+
+func (c *serverConn) LocalAddr() net.Addr {
+	return c.getWrapped().LocalAddr()
+}
+
+func (c *serverConn) RemoteAddr() net.Addr {
+	return c.getWrapped().RemoteAddr()
 }
 
 // Handshake performs the ptlshs handshake protocol, if it has not yet been performed. Note that,
@@ -326,7 +414,13 @@ func (c *serverConn) Close() error {
 // be long-running or never return.
 func (c *serverConn) Handshake() error {
 	return c.shakeOnce.do(func() error {
-		return c.handshake()
+		handshakeErr := c.handshake()
+		if c.closeOnce.isDone() {
+			// c.handshake will exit early if the connection is closed, but sometimes with a
+			// seemingly unrelated error. It is easiest to just translate the error here.
+			return net.ErrClosed
+		}
+		return handshakeErr
 	})
 }
 
@@ -350,28 +444,30 @@ func (c *serverConn) handshake() error {
 	defer origin.Close()
 
 	transcriptHMAC := signalHMAC(c.cfg.Secret)
-	transcriptDone := false
+	transcriptLock := new(sync.Mutex)
+	originalWrapped := c.getWrapped()
 	onClientWrite := func(b []byte) error {
-		if !transcriptDone {
-			transcriptHMAC.Write(b)
-		}
+		transcriptLock.Lock()
+		transcriptHMAC.Write(b)
+		transcriptLock.Unlock()
 		return nil
 	}
-	c.Conn = mitm(c.Conn, nil, onClientWrite)
-	defer func() { transcriptDone = true }()
+	c.setWrapped(mitm(c.getWrapped(), nil, onClientWrite))
+	stopTranscript := func() { c.setWrapped(originalWrapped) }
+	defer stopTranscript() // may end up a no-op, but that's okay
 
 	// Read and copy ClientHello.
-	b, err := readClientHello(ctx, c.Conn, listenerReadBufferSize)
+	b, err := readClientHello(ctx, c.getWrapped(), listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Client sent something other than ClientHello. Proxy everything to match origin behavior.
-		transcriptDone = true
-		proxyUntilClose(ctx, preconn.Wrap(c.Conn, b), origin)
+		stopTranscript()
+		proxyUntilClose(ctx, preconn.Wrap(c.getWrapped(), b), origin)
 		return fmt.Errorf("did not receive ClientHello: %w", err)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to read ClientHello: %w", err)
 	}
-	_, err = makeNetworkCall(origin.Write, b)
+	_, err = origin.Write(b)
 	if err != nil {
 		return fmt.Errorf("failed to write to origin: %w", err)
 	}
@@ -380,8 +476,8 @@ func (c *serverConn) handshake() error {
 	b, c.state, err = readServerHello(ctx, origin, listenerReadBufferSize)
 	if err != nil && !errors.As(err, new(networkError)) {
 		// Origin sent something other than ServerHello. Proxy everything to match origin behavior.
-		transcriptDone = true
-		proxyUntilClose(ctx, c.Conn, preconn.Wrap(origin, b))
+		stopTranscript()
+		proxyUntilClose(ctx, c.getWrapped(), preconn.Wrap(origin, b))
 		return fmt.Errorf("did not receive ServerHello: %w", err)
 	}
 	if err != nil {
@@ -392,7 +488,7 @@ func (c *serverConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
 	}
-	_, err = makeNetworkCall(c.Conn.Write, b)
+	_, err = c.getWrapped().Write(b)
 	if err != nil {
 		return fmt.Errorf("failed to write to client: %w", err)
 	}
@@ -403,16 +499,25 @@ func (c *serverConn) handshake() error {
 	}
 
 	// Send our own completion signal.
-	transcriptDone = true
+	transcriptLock.Lock()
 	signal, err := newServerSignal(transcriptHMAC.Sum(nil))
+	transcriptLock.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
 
-	_, err = tlsutil.WriteRecord(c.Conn, *signal, tlsState)
+	_, err = tlsutil.WriteRecord(c.getWrapped(), *signal, tlsState)
 	if err != nil {
 		return fmt.Errorf("failed to signal completion: %w", err)
 	}
+
+	// Transfer handshake deadlines to the underlying connection.
+	c.deadlinesLock.Lock()
+	c.getWrapped().SetReadDeadline(c.hsReadDeadline.get())
+	c.getWrapped().SetWriteDeadline(c.hsWriteDeadline.get())
+	c.hsReadDeadline.close()
+	c.hsWriteDeadline.close()
+	c.deadlinesLock.Unlock()
 
 	return nil
 }
@@ -428,7 +533,7 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 	// state. If we see the signal, we close the connection with the origin. Otherwise, we continue
 	// to proxy.
 
-	toClient, toOrigin := newCancelConn(c.Conn), newCancelConn(originConn)
+	toClient, toOrigin := newCancelConn(c.getWrapped()), newCancelConn(originConn)
 
 	nonFatalError := func(err error) {
 		select {
@@ -456,8 +561,10 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 		return true
 	}
 
-	foundSignal := false
+	foundSignal := make(chan struct{})
 	signalFound := func(preSignal, postSignal []byte) {
+		close(foundSignal)
+
 		// We stop both copy routines by closing the connection to the origin server. We first
 		// attempt to flush any unprocessed data.
 		toOrigin.Write(preSignal)
@@ -466,8 +573,7 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 		// We also need to ensure the unprocessed post-signal data is not lost. We prepend it to
 		// the client connection. Access to c.Conn is single-threaded until the handshake is
 		// complete, so this is safe to do without synchronization.
-		c.Conn = preconn.Wrap(c.Conn, postSignal)
-		foundSignal = true
+		c.setWrapped(preconn.Wrap(c.getWrapped(), postSignal))
 	}
 
 	rr := new(recordReader)
@@ -488,26 +594,34 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 	}
 
 	var (
-		g          = new(errgroup.Group)
-		gWaitErr   = make(chan error, 1)
-		client     = netReadWriter{mitm(toClient, onClientRead, nil)}
-		origin     = netReadWriter{toOrigin}
+		client     = mitm(toClient, onClientRead, nil)
+		origin     = toOrigin
+		copyErr    = make(chan error, 2)
 		buf1, buf2 = make([]byte, bufferSize), make([]byte, bufferSize)
 	)
-	g.Go(func() error { _, err := io.CopyBuffer(client, origin, buf1); return err })
-	g.Go(func() error { _, err := io.CopyBuffer(origin, client, buf2); return err })
-	go func() { gWaitErr <- g.Wait() }()
+	go func() { _, err := io.CopyBuffer(client, origin, buf1); copyErr <- err }()
+	go func() { _, err := io.CopyBuffer(origin, client, buf2); copyErr <- err }()
+
 	select {
-	case err := <-gWaitErr:
-		switch {
-		case foundSignal:
-			return nil
-		case err != nil:
-			return err
-		default:
-			// If the copy routines returned before the signal, it means we hit EOF.
-			return io.EOF
+	case err := <-copyErr:
+		// Cancel I/O, then wait for a second value to be sent on copyErr to ensure both copy
+		// routines have exited.
+		toClient.cancelIO()
+		toOrigin.cancelIO()
+		select {
+		case <-copyErr:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
+		if isClosedChannel(foundSignal) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		// We did not find the signal, but at least one side hit EOF.
+		return io.ErrUnexpectedEOF
+
 	case <-ctx.Done():
 		toClient.cancelIO()
 		toOrigin.cancelIO()
@@ -561,7 +675,7 @@ func readClientHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 	)
 	readHello := func() error {
 		for {
-			n, err := makeNetworkCall(_conn.Read, buf)
+			n, err := _conn.Read(buf)
 			if err != nil {
 				return networkError{err}
 			}
@@ -606,7 +720,7 @@ func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 	)
 	readHello := func() result {
 		for {
-			n, err := makeNetworkCall(_conn.Read, buf)
+			n, err := _conn.Read(buf)
 			if err != nil {
 				return result{nil, networkError{err}}
 			}
@@ -690,32 +804,7 @@ func (c mitmConn) Write(b []byte) (n int, err error) {
 	return
 }
 
-// Wraps the input io.ReadWriter such that Reads and Writes will be retried on temporary errors.
-type netReadWriter struct {
-	rw io.ReadWriter
-}
-
-func (nrw netReadWriter) Read(b []byte) (n int, err error) {
-	return makeNetworkCall(nrw.rw.Read, b)
-}
-
-func (nrw netReadWriter) Write(b []byte) (n int, err error) {
-	return makeNetworkCall(nrw.rw.Write, b)
-}
-
-// Make a network call, ignoring temporary errors.
-func makeNetworkCall(networkFn func([]byte) (int, error), buf []byte) (int, error) {
-	for {
-		n, err := networkFn(buf)
-		if err == nil {
-			return n, nil
-		}
-		if netErr, ok := err.(net.Error); !ok || !netErr.Temporary() {
-			return n, err
-		}
-	}
-}
-
+// Different than a net.Error. Used only to distinguish network errors from protocol-level errors.
 type networkError struct {
 	cause error
 }
@@ -726,6 +815,26 @@ func (err networkError) Error() string {
 
 func (err networkError) Unwrap() error {
 	return err.cause
+}
+
+// Used to ensure we pass back net.Errors when wrapped connections return them to us.
+type wrappedNetError struct {
+	wrapped net.Error
+	msg     string
+}
+
+func (err wrappedNetError) Error() string   { return fmt.Sprintf("%s: %v", err.msg, err.wrapped) }
+func (err wrappedNetError) Timeout() bool   { return err.wrapped.Timeout() }
+func (err wrappedNetError) Temporary() bool { return err.wrapped.Temporary() }
+func (err wrappedNetError) Unwrap() error   { return err.wrapped }
+
+// Wraps the input error with the message. Uses wrappedNetError if err is a net.Error. Otherwise,
+// fmt.Errorf is used.
+func wrapError(msg string, err error) error {
+	if netErr, ok := err.(net.Error); ok {
+		return wrappedNetError{netErr, msg}
+	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 // Proxies until an error is returned on either connection or the context completes.
@@ -753,23 +862,33 @@ func newOnce() *once {
 	return &once{done: make(chan struct{})}
 }
 
-func (cond *once) wait() {
-	<-cond.done
+func (o *once) wait() {
+	<-o.done
 }
 
-func (cond *once) isDone() bool {
+func (o *once) isDone() bool {
 	select {
-	case <-cond.done:
+	case <-o.done:
 		return true
 	default:
 		return false
 	}
 }
 
-func (cond *once) do(f func() error) error {
-	cond.once.Do(func() {
-		cond.err = f()
-		close(cond.done)
+func (o *once) do(f func() error) error {
+	o.once.Do(func() {
+		o.err = f()
+		close(o.done)
 	})
-	return cond.err
+	return o.err
+}
+
+// Assumes no value is ever sent on c.
+func isClosedChannel(c chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
 }

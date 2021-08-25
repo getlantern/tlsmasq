@@ -12,6 +12,9 @@ import (
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
+// n.b. We would ideally test the Conn type with nettest.TestConn. However, the underlying tls.Conn
+// does not pass nettest.TestConn, preventing us from utilizing the test ourselves.
+
 func TestHandshake(t *testing.T) {
 	t.Parallel()
 

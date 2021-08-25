@@ -4,16 +4,29 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/getlantern/nettest"
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsutil"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConn(t *testing.T) {
+	pm := pipeMaker{
+		t:            t,
+		originConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+	}
+	t.Run("ClientFirst", func(t *testing.T) { nettest.TestConn(t, pm.clientFirstPipe) })
+	t.Run("ServerFirst", func(t *testing.T) { nettest.TestConn(t, pm.serverFirstPipe) })
+}
 
 func TestHandshake(t *testing.T) {
 	t.Parallel()
@@ -84,24 +97,30 @@ func TestIssue17(t *testing.T) {
 	require.NoError(t, err)
 
 	conn := &serverConn{
-		Conn:       serverTransport,
+		wrapped:    serverTransport,
 		nonceCache: newNonceCache(time.Hour),
 	}
 	require.NoError(t,
 		conn.watchForCompletion(context.Background(), len(*sig)-1, readerState, newDummyOrigin()))
 }
 
-// Calling Close on a net.Conn should unblock any Read or Write operations.
-func TestCloseUnblock(t *testing.T) {
-	t.Run("Client", closeUnblockHelper(true))
-	t.Run("Server", closeUnblockHelper(false))
+// Ensures that timeouts and calls to Close cause Read and Write calls to unblock.
+func TestUnblock(t *testing.T) {
+	t.Run("ClientClose", testUnblockHelper(true, true))
+	t.Run("ServerClose", testUnblockHelper(false, true))
+	t.Run("ClientTimeout", testUnblockHelper(true, false))
+	t.Run("ServerTimeout", testUnblockHelper(false, false))
 }
 
-func closeUnblockHelper(testClient bool) func(t *testing.T) {
+// testClient == false => test server-side
+// testClose == false => test timeout
+func testUnblockHelper(testClient, testClose bool) func(t *testing.T) {
+	var inThePast = time.Now().Add(-1 * time.Hour)
+
 	return func(t *testing.T) {
 		t.Parallel()
 
-		// To test whether Close unblocks pending I/O, we initiate a handshake with a peer speaking
+		// To test whether we can unblock pending I/O, we initiate a handshake with a peer speaking
 		// plain TLS. The ptlshs side of the connection will hang waiting for the peer's completion
 		// signal. Since the completion signal is specific to ptlshs, it will never be sent.
 
@@ -147,15 +166,71 @@ func closeUnblockHelper(testClient bool) func(t *testing.T) {
 		default:
 		}
 
-		// Introduce a small, randomized delay in the hopes of catching the server at various points of
-		// the ptlshs handshake across test runs.
+		// Introduce a small, randomized delay in the hopes of catching the server at various points
+		// of the ptlshs handshake across test runs.
 
 		time.Sleep(randomDuration(t, 50*time.Millisecond))
 
-		// Calling Close on testConn should cause Read to unblock and return an error.
-		testConn.Close()
-		require.Error(t, <-testErrC)
+		if testClose {
+			testConn.Close()
+			require.ErrorIs(t, <-testErrC, net.ErrClosed)
+		} else {
+			testConn.SetDeadline(inThePast)
+			require.ErrorIs(t, <-testErrC, os.ErrDeadlineExceeded)
+		}
 	}
+}
+
+type pipeMaker struct {
+	t            *testing.T
+	originConfig *tls.Config
+}
+
+// Implements nettest.MakePipe.
+func (pm pipeMaker) makePipe() (client, server net.Conn, stop func(), err error) {
+	var secret Secret
+	if _, err := rand.Read(secret[:]); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to generate secret: %w", err)
+	}
+
+	origin := testutil.StartOrigin(pm.t, pm.originConfig.Clone())
+	dCfg := DialerConfig{secret, StdLibHandshaker{Config: &tls.Config{InsecureSkipVerify: true}}, 0}
+	lCfg := ListenerConfig{origin.DialContext, secret, 0, nil}
+
+	clientTransport, serverTransport := net.Pipe()
+	client = Client(clientTransport, dCfg)
+	server = Server(serverTransport, lCfg)
+	stop = func() { client.Close(); server.Close() }
+
+	// We execute the handshake before returning the piped connections. Ideally the tests defined in
+	// nettest.TestConn would pass without this step. However, making this happen would require
+	// significant additional complexity which is probably not useful in practice. A pipe of
+	// tls.Conn instances would suffer from the same issues (and more), so we are in good company.
+
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.(Conn).Handshake() }()
+	if err := client.(Conn).Handshake(); err != nil {
+		stop()
+		return nil, nil, nil, fmt.Errorf("client handshake error: %w", err)
+	}
+	if err := <-serverErr; err != nil {
+		stop()
+		return nil, nil, nil, fmt.Errorf("server handshake error: %w", err)
+	}
+
+	return client, server, stop, nil
+}
+
+// nettest.TestConn focuses on the first connection of the pair. We want to test both the client-
+// side and server-side connections, so we have separate make-pipe functions for each purpose.
+
+func (pm pipeMaker) clientFirstPipe() (client, server net.Conn, stop func(), err error) {
+	return pm.makePipe()
+}
+
+func (pm pipeMaker) serverFirstPipe() (server, client net.Conn, stop func(), err error) {
+	client, server, stop, err = pm.clientFirstPipe()
+	return
 }
 
 // Used by TestIssue17

@@ -10,6 +10,9 @@ import (
 // BufferedPipe is like net.Pipe(), but with internal buffering on writes. In practice, our
 // connections are generally TCP connections, for which writes will not block.
 //
+// Buffered writes may not be fully flushed to the peer when this connection is closed. Thus this
+// pipe may not be suitable for tests which require strict adherence to the net.Conn contract.
+//
 // Should probably be replaced with the standard library implementation if this happens:
 // https://github.com/golang/go/issues/34502
 func BufferedPipe() (net.Conn, net.Conn) {
