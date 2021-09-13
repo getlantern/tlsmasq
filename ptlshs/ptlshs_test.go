@@ -28,8 +28,7 @@ func TestListenAndDial(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
-
+	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
 			Config: &tls.Config{InsecureSkipVerify: true},
@@ -102,7 +101,7 @@ func TestSessionResumption(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
 	handshaker := &resumptionCheckingHandshaker{
 		Config: &tls.Config{
 			InsecureSkipVerify: true,
@@ -181,7 +180,6 @@ func TestSignalReplay(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
 	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
 	require.NoError(t, err)
 	origin.DoPostHandshake(func(conn net.Conn) error {
@@ -342,7 +340,7 @@ func TestPostHandshakeData(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
 	origin.DoPostHandshake(func(conn net.Conn) error {
 		if _, err := conn.Write([]byte("some nonsense from the origin")); err != nil {
 			return fmt.Errorf("write error: %w", err)
@@ -446,7 +444,7 @@ func TestPostHandshakeInjection(t *testing.T) {
 		tls.VersionTLS12, tls.TLS_CHACHA20_POLY1305_SHA256, injectorSecret, injectorIV, injectorSeq)
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
 			Config: &tls.Config{InsecureSkipVerify: true},
@@ -551,7 +549,7 @@ func TestPostHandshakeInjection(t *testing.T) {
 // TLS ClientHello.
 func TestProgressionToProxy(t *testing.T) {
 	listenTLS := func() (net.Listener, error) {
-		return tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+		return tls.Listen("tcp", "localhost:0", &tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
 	}
 	dialTLS := func(network, address string) (net.Conn, error) {
 		return tls.Dial(network, address, &tls.Config{InsecureSkipVerify: true})

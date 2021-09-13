@@ -22,7 +22,7 @@ import (
 func TestConn(t *testing.T) {
 	pm := pipeMaker{
 		t:            t,
-		originConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+		originConfig: &tls.Config{Certificates: []tls.Certificate{testutil.Cert}},
 	}
 	t.Run("ClientFirst", func(t *testing.T) { nettest.TestConn(t, pm.clientFirstPipe) })
 	t.Run("ServerFirst", func(t *testing.T) { nettest.TestConn(t, pm.serverFirstPipe) })
@@ -43,7 +43,7 @@ func TestHandshake(t *testing.T) {
 			MinVersion:         version,
 			MaxVersion:         version,
 			CipherSuites:       []uint16{suite},
-			Certificates:       []tls.Certificate{cert},
+			Certificates:       []tls.Certificate{testutil.Cert},
 		}
 		secret Secret
 	)
@@ -131,7 +131,7 @@ func testUnblockHelper(testClient, testClose bool) func(t *testing.T) {
 				MinVersion:         version,
 				MaxVersion:         version,
 				CipherSuites:       []uint16{suite},
-				Certificates:       []tls.Certificate{cert},
+				Certificates:       []tls.Certificate{testutil.Cert},
 			}
 			clientTransport, serverTransport = testutil.BufferedPipe()
 			secret                           Secret

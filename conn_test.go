@@ -30,7 +30,7 @@ func TestHandshake(t *testing.T) {
 			MinVersion:         version,
 			MaxVersion:         version,
 			CipherSuites:       []uint16{suite},
-			Certificates:       []tls.Certificate{cert},
+			Certificates:       []tls.Certificate{testutil.Cert},
 		}
 		secret ptlshs.Secret
 	)

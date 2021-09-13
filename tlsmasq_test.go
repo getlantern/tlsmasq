@@ -22,11 +22,11 @@ func TestListenAndDial(t *testing.T) {
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 
-	_, err := rand.Read(secret[:])
+	_, err := cryptoRand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
-	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
+	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
+	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{testutil.Cert}}
 	dialerCfg := DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
 			Handshaker: ptlshs.StdLibHandshaker{
