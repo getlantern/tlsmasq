@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
-	"time"
 
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
@@ -41,40 +40,26 @@ type Dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-type dialer struct {
+type tlsmasqDialer struct {
 	Dialer
 	DialerConfig
 }
 
-func (d dialer) Dial(network, address string) (net.Conn, error) {
+func NewTlsMasqDialer(cfg DialerConfig) Dialer {
+	return tlsmasqDialer{&net.Dialer{}, cfg.withDefaults()}
+}
+
+func (d tlsmasqDialer) Dial(network, address string) (net.Conn, error) {
 	return d.DialContext(context.Background(), network, address)
 }
 
-func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (d tlsmasqDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	ptlsDialer := ptlshs.WrapDialer(d.Dialer, d.ProxiedHandshakeConfig)
 	conn, err := ptlsDialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
-	return newConn(conn.(ptlshs.Conn), d.TLSConfig, true, d.ProxiedHandshakeConfig.Secret), nil
-}
-
-// WrapDialer wraps the input dialer with a network dialer which will perform the tlsmasq protocol.
-// Dialing will result in TLS connections with peers.
-func WrapDialer(d Dialer, cfg DialerConfig) Dialer {
-	return dialer{d, cfg.withDefaults()}
-}
-
-// Dial a tlsmasq listener. This will result in a TLS connection with the peer.
-func Dial(network, address string, cfg DialerConfig) (net.Conn, error) {
-	return WrapDialer(&net.Dialer{}, cfg).Dial(network, address)
-}
-
-// DialTimeout acts like Dial but takes a timeout.
-func DialTimeout(network, address string, cfg DialerConfig, timeout time.Duration) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	return WrapDialer(&net.Dialer{}, cfg).DialContext(ctx, network, address)
+	return newTlsmasqConn(conn.(ptlshs.PtlshsConn), d.TLSConfig, true, d.ProxiedHandshakeConfig.Secret), nil
 }
 
 // ListenerConfig specifies configuration for listening.
@@ -108,7 +93,7 @@ func (l listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	// We know the type assertion will succeed because we know l.Listener comes from ptlshs.
-	return newConn(conn.(ptlshs.Conn), l.TLSConfig, false, l.ProxiedHandshakeConfig.Secret), nil
+	return newTlsmasqConn(conn.(ptlshs.PtlshsConn), l.TLSConfig, false, l.ProxiedHandshakeConfig.Secret), nil
 }
 
 // WrapListener wraps the input listener with one which speaks the tlsmasq protocol. Accepted

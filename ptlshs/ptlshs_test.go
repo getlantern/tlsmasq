@@ -127,7 +127,7 @@ func TestSessionResumption(t *testing.T) {
 				}
 				defer conn.Close()
 
-				if err := conn.(Conn).Handshake(); err != nil {
+				if err := conn.(PtlshsConn).Handshake(); err != nil {
 					return fmt.Errorf("handshake error for connection %d: %w", i, err)
 				}
 			}
@@ -142,7 +142,7 @@ func TestSessionResumption(t *testing.T) {
 		}
 		defer conn.Close()
 
-		if err := conn.(Conn).Handshake(); err != nil {
+		if err := conn.(PtlshsConn).Handshake(); err != nil {
 			return fmt.Errorf("handshake error for connection 1: %w", err)
 		}
 		if err := conn.Close(); err != nil {
@@ -156,7 +156,7 @@ func TestSessionResumption(t *testing.T) {
 		}
 		defer conn.Close()
 
-		if err := conn.(Conn).Handshake(); err != nil {
+		if err := conn.(PtlshsConn).Handshake(); err != nil {
 			return fmt.Errorf("handshake error for connection 2: %w", err)
 		}
 		return nil
@@ -182,6 +182,8 @@ func TestSignalReplay(t *testing.T) {
 	require.NoError(t, err)
 
 	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
+	require.NoError(t, err)
 	origin.DoPostHandshake(func(conn net.Conn) error {
 		if _, err := conn.Write([]byte(originMsg)); err != nil {
 			return fmt.Errorf("write error %v", err)
@@ -288,7 +290,7 @@ func TestSignalReplay(t *testing.T) {
 		if err != nil {
 			return "", fmt.Errorf("dial error for first connection: %w", err)
 		}
-		if err := conn.(Conn).Handshake(); err != nil {
+		if err := conn.(PtlshsConn).Handshake(); err != nil {
 			return "", fmt.Errorf("handshake error for first connection: %w", err)
 		}
 		defer conn.Close()
@@ -624,7 +626,7 @@ func progressionToProxyHelper(t *testing.T, listen func() (net.Listener, error),
 			logger.Logf("listener accept error: %v", err)
 			return
 		}
-		if err := conn.(Conn).Handshake(); err != nil {
+		if err := conn.(PtlshsConn).Handshake(); err != nil {
 			logger.Logf("listener handshake error: %v", err)
 			return
 		}

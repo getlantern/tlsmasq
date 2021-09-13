@@ -1,7 +1,7 @@
 package tlsmasq
 
 import (
-	"crypto/rand"
+	cryptoRand "crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -18,8 +18,7 @@ func TestListenAndDial(t *testing.T) {
 	t.Parallel()
 
 	var (
-		secret [52]byte
-		// wg                   = new(sync.WaitGroup)
+		secret               [52]byte
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 
@@ -75,7 +74,7 @@ func TestListenAndDial(t *testing.T) {
 	}()
 
 	msgFromServer, clientErr := func() (string, error) {
-		conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
+		conn, err := NewTlsMasqDialer(dialerCfg).Dial("tcp", l.Addr().String())
 		if err != nil {
 			return "", fmt.Errorf("dial failed: %w", err)
 		}
@@ -94,8 +93,8 @@ func TestListenAndDial(t *testing.T) {
 		return string(b[:n]), nil
 	}()
 
-	assert.NoError(t, clientErr)
-	assert.NoError(t, <-serverErr)
-	assert.Equal(t, clientMsg, <-msgFromClient)
-	assert.Equal(t, serverMsg, msgFromServer)
+	require.NoError(t, clientErr)
+	require.NoError(t, <-serverErr)
+	require.Equal(t, clientMsg, <-msgFromClient)
+	require.Equal(t, serverMsg, msgFromServer)
 }

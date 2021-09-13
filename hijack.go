@@ -31,7 +31,7 @@ var (
 // to use a tls.Config which does not support this version and/or suite. However, it is important to
 // set fields like cfg.CipherSuites and cfg.MinVersion to ensure that the security parameters of the
 // hijacked connection are acceptable.
-func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret, client bool) (net.Conn, error) {
+func hijack(conn ptlshs.PtlshsConn, cfg *tls.Config, preshared ptlshs.Secret, client bool) (net.Conn, error) {
 	if err := conn.Handshake(); err != nil {
 		return nil, fmt.Errorf("proxied handshake failed: %w", err)
 	}
@@ -60,7 +60,7 @@ func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret, client b
 	return hijacked, nil
 }
 
-func ensureParameters(cfg *tls.Config, conn ptlshs.Conn) (*tls.Config, error) {
+func ensureParameters(cfg *tls.Config, conn ptlshs.PtlshsConn) (*tls.Config, error) {
 	version, suite := conn.TLSVersion(), conn.CipherSuite()
 	if !suiteSupported(cfg, suite) {
 		return nil, fmt.Errorf("negotiated suite %#x is not supported", suite)
@@ -121,7 +121,7 @@ type disguisedConn struct {
 	standardRead func([]byte) (int, error)
 }
 
-func disguise(conn ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
+func disguise(conn ptlshs.PtlshsConn, preshared ptlshs.Secret) (*disguisedConn, error) {
 	state, err := tlsutil.NewConnectionState(
 		conn.TLSVersion(), conn.CipherSuite(), preshared, conn.IV(), conn.NextSeq())
 	if err != nil {

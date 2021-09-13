@@ -39,7 +39,9 @@ func TestHandshake(t *testing.T) {
 
 	origin := testutil.StartOrigin(t, tlsCfg)
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := Client(clientTransport, DialerConfig{
+
+	// Client Init
+	clientDialerCfg := DialerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
 			Handshaker: ptlshs.StdLibHandshaker{
@@ -47,16 +49,32 @@ func TestHandshake(t *testing.T) {
 			},
 			Secret: secret,
 		},
-	})
-	serverConn := Server(serverTransport, ListenerConfig{
+	}
+	clientConn := newTlsmasqConn(
+		ptlshs.Client(
+			clientTransport,
+			clientDialerCfg.ProxiedHandshakeConfig),
+		clientDialerCfg.TLSConfig, true,
+		clientDialerCfg.ProxiedHandshakeConfig.Secret,
+	)
+	defer clientConn.Close()
+
+	// ServerInit Init
+	listenerCfg := ListenerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
 			DialOrigin: origin.DialContext,
 			Secret:     secret,
 		},
-	})
+	}
+	serverConn := newTlsmasqConn(
+		ptlshs.Server(
+			serverTransport,
+			listenerCfg.ProxiedHandshakeConfig),
+		listenerCfg.TLSConfig, false,
+		listenerCfg.ProxiedHandshakeConfig.Secret,
+	)
 	defer serverConn.Close()
-	defer clientConn.Close()
 
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- serverConn.Handshake() }()

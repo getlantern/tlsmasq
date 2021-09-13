@@ -120,13 +120,6 @@ func Dial(network, address string, cfg DialerConfig) (net.Conn, error) {
 	return WrapDialer(&net.Dialer{}, cfg).Dial(network, address)
 }
 
-// DialTimeout acts like Dial but takes a timeout.
-func DialTimeout(network, address string, cfg DialerConfig, timeout time.Duration) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	return WrapDialer(&net.Dialer{}, cfg).DialContext(ctx, network, address)
-}
-
 // ListenerConfig specifies configuration for listening.
 type ListenerConfig struct {
 	// DialOrigin is used to create TCP connections to the origin server. Must not be nil.

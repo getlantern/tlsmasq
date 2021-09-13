@@ -16,12 +16,12 @@ import (
 	"github.com/getlantern/tlsutil"
 )
 
-// Conn is a network connection between two peers speaking the ptlshs protocol. Methods returning
+// PtlshsConn is a network connection between two peers speaking the ptlshs protocol. Methods returning
 // connection state data (TLSVersion, CipherSuite, etc.) block until the handshake is complete.
 //
 // Connections returned by listeners and dialers in this package will implement this interface.
 // However, most users of this package can ignore this type.
-type Conn interface {
+type PtlshsConn interface {
 	net.Conn
 
 	// Handshake executes the ptlshs handshake protocol, if it has not yet been performed. Note
@@ -48,7 +48,7 @@ type Conn interface {
 	IV() [16]byte
 }
 
-type connState struct {
+type ptlshsConnState struct {
 	version, suite uint16
 
 	seq [8]byte
@@ -57,7 +57,7 @@ type connState struct {
 	seqLock sync.Mutex
 }
 
-func (s *connState) nextSeq() [8]byte {
+func (s *ptlshsConnState) nextSeq() [8]byte {
 	s.seqLock.Lock()
 	defer s.seqLock.Unlock()
 
@@ -82,14 +82,14 @@ type clientConn struct {
 	cfg DialerConfig
 
 	// One of the following is initialized after Handshake().
-	state        *connState
+	state        *ptlshsConnState
 	handshakeErr error
 
 	shakeOnce, closeOnce *once
 }
 
 // Client initializes a client-side connection.
-func Client(toServer net.Conn, cfg DialerConfig) Conn {
+func Client(toServer net.Conn, cfg DialerConfig) PtlshsConn {
 	cfg = cfg.withDefaults()
 	return &clientConn{toServer, cfg, nil, nil, newOnce(), newOnce()}
 }
@@ -181,7 +181,7 @@ func (c *clientConn) handshake() error {
 	}
 	// We're overwriting concurrently accessed fields here. However, these are not used concurrently
 	// until the handshake is complete.
-	c.state = &connState{hsResult.Version, hsResult.CipherSuite, seq, iv, sync.Mutex{}}
+	c.state = &ptlshsConnState{hsResult.Version, hsResult.CipherSuite, seq, iv, sync.Mutex{}}
 	return nil
 }
 
@@ -292,7 +292,7 @@ type serverConn struct {
 	closeCache bool
 
 	// Initialized if the handshake completes successfully.
-	state *connState
+	state *ptlshsConnState
 
 	shakeOnce, closeOnce *once
 
@@ -302,14 +302,14 @@ type serverConn struct {
 }
 
 // Server initializes a server-side connection.
-func Server(toClient net.Conn, cfg ListenerConfig) Conn {
+func Server(toClient net.Conn, cfg ListenerConfig) PtlshsConn {
 	cfg = cfg.withDefaults()
 	nc := newNonceCache(cfg.NonceSweepInterval)
 	return serverConnWithCache(toClient, cfg, nc, true)
 }
 
 // Ignores cfg.NonceSweepInterval.
-func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
+func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) PtlshsConn {
 	return &serverConn{
 		toClient, sync.RWMutex{}, cfg, cache, closeCache, nil,
 		newOnce(), newOnce(), newDeadline(), newDeadline(), sync.Mutex{}}
@@ -706,9 +706,9 @@ func readClientHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 //	- A non-temporary network error is encountered.
 // Whatever was read is always returned. When a valid ServerHello is read, it is parsed and used to
 // create a connection state.
-func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte, *connState, error) {
+func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte, *ptlshsConnState, error) {
 	type result struct {
-		cs  *connState
+		cs  *ptlshsConnState
 		err error
 	}
 
@@ -733,7 +733,7 @@ func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 				if err != nil {
 					return result{nil, fmt.Errorf("failed to derive sequence and IV: %w", err)}
 				}
-				return result{&connState{version, suite, seq, iv, sync.Mutex{}}, nil}
+				return result{&ptlshsConnState{version, suite, seq, iv, sync.Mutex{}}, nil}
 			}
 			if !errors.Is(err, io.EOF) {
 				return result{nil, err}

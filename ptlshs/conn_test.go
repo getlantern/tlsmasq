@@ -208,8 +208,8 @@ func (pm pipeMaker) makePipe() (client, server net.Conn, stop func(), err error)
 	// tls.Conn instances would suffer from the same issues (and more), so we are in good company.
 
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.(Conn).Handshake() }()
-	if err := client.(Conn).Handshake(); err != nil {
+	go func() { serverErr <- server.(PtlshsConn).Handshake() }()
+	if err := client.(PtlshsConn).Handshake(); err != nil {
 		stop()
 		return nil, nil, nil, fmt.Errorf("client handshake error: %w", err)
 	}
