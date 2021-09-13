@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
 	"testing"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsmasq/ptlshs"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,6 +26,8 @@ func TestListenAndDial(t *testing.T) {
 	require.NoError(t, err)
 
 	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
+	require.NoError(t, err)
+	defer origin.Close()
 	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{testutil.Cert}}
 	dialerCfg := DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
