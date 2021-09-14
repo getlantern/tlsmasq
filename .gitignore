@@ -1,0 +1,4 @@
+tlsmasq-fuzz.zip
+fuzz_workdir/crashers
+fuzz_workdir/corpus
+fuzz_workdir/suppressions
