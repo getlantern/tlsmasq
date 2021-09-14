@@ -74,6 +74,12 @@ type DialerConfig struct {
 	// NonceTTL specifies the time-to-live for nonces used in completion signals. DefaultNonceTTL is
 	// used if NonceTTL is unspecified.
 	NonceTTL time.Duration
+
+	// Enable to use fuzzutil/fuzzechoconn.go:FuzzEchoConn, which uses
+	// FuzzEchoClientHelloData for the first TLS ClientHello. Rest of the
+	// communication is written as is
+	UseFuzzEchoConn         bool
+	FuzzEchoClientHelloData []byte
 }
 
 func (cfg DialerConfig) withDefaults() DialerConfig {
