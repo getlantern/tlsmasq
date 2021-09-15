@@ -2,6 +2,11 @@ package fuzzutil
 
 import "net"
 
+// fuzzEchoConn is used for TLS connections.
+//
+// The first time a write should occur, it sends 'writeData' in lieu of
+// whatever would have been sent. Since this is primarily only used for TLS
+// connections, the substituted packet is the TLS ClientHello
 type fuzzEchoConn struct {
 	net.Conn
 	id           string

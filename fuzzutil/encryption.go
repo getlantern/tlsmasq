@@ -59,6 +59,11 @@ func encryptFuzzConfig(plaintext []byte) (nonce []byte, key []byte, ciphertext [
 	return nonce, key, aesCipher.Seal(nil, nonce, plaintext, nil), nil
 }
 
+// packFuzzInput packs data in this format:
+//
+//	  nonce | key | AES(seed) | SEPARATOR | clientHelloData
+//
+// See 'On Fuzzing -> Fuzzing Internals' in the README for a lengthy breakdown
 func packFuzzInput(nonce, key, encryptedConfig, clientHelloData []byte) []byte {
 	var b bytes.Buffer
 	b.Write(nonce)
@@ -74,7 +79,6 @@ func DecryptAndUnpackFuzzInput(packedData []byte) (decryptedConfig []byte, clien
 	if idx == -1 {
 		return nil, nil, fmt.Errorf("No SEPARATOR found")
 	}
-	// nonce | key | AES(seed) | SEPARATOR | clientHelloData
 	nonce := packedData[:AES128_NONCE_SIZE]
 	key := packedData[AES128_NONCE_SIZE : AES128_NONCE_SIZE+AES128_KEY_SIZE]
 	ciphertext := packedData[AES128_NONCE_SIZE+AES128_KEY_SIZE : idx]

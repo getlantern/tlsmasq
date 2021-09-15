@@ -22,6 +22,8 @@ import (
 
 var recvHandshakeChan = make(chan []byte)
 
+// DumpClientHelloConn implements net.Conn interface. It doesn't do anything
+// apart from sending whatever it would write to recvHandshakeChan
 type DumpClientHelloConn struct {
 }
 
@@ -58,6 +60,7 @@ func (self *DumpClientHelloConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+// writeGenerationReport dumps a report including the git commit hash and tlsConfig
 func writeGenerationReport(tlsConfig *tls.Config, fuzzOutDirPath string) error {
 	var sb strings.Builder
 	commitHash, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
@@ -75,7 +78,11 @@ func writeGenerationReport(tlsConfig *tls.Config, fuzzOutDirPath string) error {
 	return nil
 }
 
+// TestGenerateClientHellos is not a test, but an entry to a standalone binary
+// that runs and captures TLS ClientHello packets from various tls
+// configurations. See "On Fuzzing" section in the READMe for more info
 func TestGenerateClientHellos(t *testing.T) {
+	// Safeguard from running this test with `go test ./...`
 	if os.Getenv("DO") == "" {
 		t.SkipNow()
 	}
@@ -93,30 +100,36 @@ func TestGenerateClientHellos(t *testing.T) {
 		fuzzOutDirPath := fmt.Sprintf(filepath.Join(projectpath.Root,
 			"fuzz_workdir/annotated_corpus", "%s"), fileid)
 		require.NoError(t, os.MkdirAll(fuzzOutDirPath, os.ModePerm))
+
 		// For each config, make 5 permutations with different seeds
 		for i := 0; i < 5; i++ {
-			// Make random seed and write seed to file, along with the seedAndDataSeparator
+			// Make a random seed
+			// XXX Currently, the random number seed is the entire serializable
+			// tls configuration we work with. See 'On Fuzzing: Limitations'
+			// section in the README for more details
 			seed, err := getSecureRandomByteSlice(CONFIG_SIZE)
 			require.NoError(t, err)
+
 			nonce, key, encryptedConfig, err := encryptFuzzConfig(seed)
 			require.NoError(t, err)
 
-			// Set tlsConfig default valus and make tlsClient
+			// XXX 0 here doesn't mean anything. The seed is implanted in
+			// mathRand.Seed()
 			aCase.tlsConfig.Rand = MathRandReader(0)
 			mathRand.Seed(int64(binary.LittleEndian.Uint64(seed)))
-			// myCase.tlsConfig.Time = func() time.Time { return time.Date(2000, 1, 1, 1, 1, 1, 1, nil) }
 			tlsClient := tls.Client(new(DumpClientHelloConn), aCase.tlsConfig)
 			// XXX This will block until a read occurs, which will never happen
+			// since we're short-circuiting the program after a successful
+			// net.Conn.Write()
 			go func() {
 				require.NoError(t, tlsClient.Handshake())
 			}()
 
-			// Wait until a write is done and close stuff
+			// Wait until a write is done and close everything
 			clientHelloData := <-recvHandshakeChan
 			require.NoError(t, tlsClient.Close())
 
 			fuzzInput := packFuzzInput(nonce, key, encryptedConfig, clientHelloData)
-
 			outFilePath := fmt.Sprintf(filepath.Join(fuzzOutDirPath, "%s_%d.raw"), fileid, i)
 			err = os.WriteFile(outFilePath, fuzzInput, 0644)
 			require.NoError(t, err)
@@ -127,6 +140,11 @@ func TestGenerateClientHellos(t *testing.T) {
 	}
 }
 
+// TestFuzz is a predictable sanity check for `fuzz.go:Fuzz()`
+//
+// It basically does the same thing as `fuzz.go:Fuzz()`, which is run
+// fuzzutil.RunFuzz(), but does it without any mutations. Helpful for debugging
+// specific cases
 func TestFuzz(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +159,6 @@ func TestFuzz(t *testing.T) {
 		seed := int64(binary.LittleEndian.Uint64(seedAsBytes))
 		// log.Println(len(clientHelloHandshake))
 		// log.Println(seed)
-		require.NoError(t, RunTestFuzz(seed, clientHelloHandshake))
+		require.NoError(t, RunFuzz(seed, clientHelloHandshake))
 	}
 }

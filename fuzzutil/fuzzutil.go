@@ -13,7 +13,7 @@ import (
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
-func RunTestFuzz(seed int64, clientHelloHandshake []byte) error {
+func RunFuzz(seed int64, clientHelloHandshake []byte) error {
 	var (
 		secret               [52]byte
 		clientMsg, serverMsg = "hello from the client", "hello from the server"

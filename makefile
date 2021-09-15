@@ -2,16 +2,16 @@
 
 all: build
 
-#: Build the project. Useful as a sanity check
+#: Build the project. Since tlsmasq is a library, this is useful only as a sanity check.
 build:
 	go build
 
-#: Generate fuzz input from various tls configurations. See README for more info
+#: runs `fuzzutil/fuzzutil_test.go:TestGenerateClientHellos` as a standalone program to generate fuzz input. See "On Fuzzing" section in the README for more info
 generate-fuzz-input:
 	(cd fuzzutil; DO=1 go test -run TestGenerateClientHellos)
 	@echo "Fuzz input generated and automatically propagated to ./fuzz_workdir/annotated_corpus"
 
-#: Run tests
+#: Run all tests
 run-tests:
 	go test -race ./...
 
@@ -19,7 +19,6 @@ run-tests:
 run-fuzz: prep-corpus tlsmasq-fuzz.zip
 	go-fuzz -bin=./tlsmasq-fuzz.zip -workdir=fuzz_workdir
 
-#: Copy all corpus input to fuzz_workdir/corpus
 prep-corpus:
 	find fuzz_workdir/annotated_corpus -type f -name "*.raw" -exec cp "{}" fuzz_workdir/corpus \;
 
