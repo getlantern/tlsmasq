@@ -25,7 +25,7 @@ prep-corpus:
 tlsmasq-fuzz.zip:
 	go get github.com/dvyukov/go-fuzz/go-fuzz
 	go get github.com/dvyukov/go-fuzz/go-fuzz-build
-	go-fuzz-build github.com/getlantern/tlsmasq
+	go-fuzz-build -o tlsmasq-fuzz.zip github.com/getlantern/tlsmasq/fuzzutil
 
 clean:
 	rm -rf ./tlsmasq-fuzz.zip
