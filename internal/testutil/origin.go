@@ -16,7 +16,7 @@ type TLSOrigin struct {
 	sync.Mutex
 }
 
-// StartOrigin starts a TLSOrigin. There is no need to call Close on the returned origin.
+// StartOrigin starts a TLSOrigin. Caller must call TLSOrigin.Close()
 func StartOrigin(cfg *tls.Config) (*TLSOrigin, error) {
 	l, err := tls.Listen("tcp", "localhost:0", cfg)
 	if err != nil {
