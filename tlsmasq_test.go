@@ -11,6 +11,7 @@ import (
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsmasq/ptlshs"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,8 +96,8 @@ func TestListenAndDial(t *testing.T) {
 		return string(b[:n]), nil
 	}()
 
-	require.NoError(t, clientErr)
-	require.NoError(t, <-serverErr)
-	require.Equal(t, clientMsg, <-msgFromClient)
-	require.Equal(t, serverMsg, msgFromServer)
+	assert.NoError(t, clientErr)
+	assert.NoError(t, <-serverErr)
+	assert.Equal(t, clientMsg, <-msgFromClient)
+	assert.Equal(t, serverMsg, msgFromServer)
 }
