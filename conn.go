@@ -9,7 +9,7 @@ import (
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
-type tlsmasqConn struct {
+type conn struct {
 	// A ptlshs.Conn until the handshake has occurred, then just a net.Conn.
 	net.Conn
 
@@ -20,18 +20,18 @@ type tlsmasqConn struct {
 	handshakeErr error
 }
 
-func newTlsmasqConn(c ptlshs.PtlshsConn, cfg *tls.Config, isClient bool, preshared ptlshs.Secret) *tlsmasqConn {
-	return &tlsmasqConn{c, cfg, isClient, preshared, sync.Once{}, nil}
+func newTlsmasqConn(c ptlshs.Conn, cfg *tls.Config, isClient bool, preshared ptlshs.Secret) *conn {
+	return &conn{c, cfg, isClient, preshared, sync.Once{}, nil}
 }
 
-func (c *tlsmasqConn) Read(b []byte) (n int, err error) {
+func (c *conn) Read(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
 		return 0, fmt.Errorf("handshake failed: %w", err)
 	}
 	return c.Conn.Read(b)
 }
 
-func (c *tlsmasqConn) Write(b []byte) (n int, err error) {
+func (c *conn) Write(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
 		return 0, fmt.Errorf("handshake failed: %w", err)
 	}
@@ -44,9 +44,9 @@ func (c *tlsmasqConn) Write(b []byte) (n int, err error) {
 // probe, this handshake function may not return until the probe closes the
 // connection on its end. As a result, this function should be treated as one
 // which may be long-running or never return.
-func (c *tlsmasqConn) Handshake() error {
+func (c *conn) Handshake() error {
 	c.shakeOnce.Do(func() {
-		hijacked, err := hijack(c.Conn.(ptlshs.PtlshsConn), c.cfg, c.preshared, c.isClient)
+		hijacked, err := hijack(c.Conn.(ptlshs.Conn), c.cfg, c.preshared, c.isClient)
 		if err != nil {
 			c.handshakeErr = err
 			return

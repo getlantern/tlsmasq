@@ -40,26 +40,26 @@ type Dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-type tlsmasqDialer struct {
+type dialer struct {
 	Dialer
 	DialerConfig
 }
 
 func NewTlsMasqDialer(cfg DialerConfig) Dialer {
-	return tlsmasqDialer{&net.Dialer{}, cfg.withDefaults()}
+	return dialer{&net.Dialer{}, cfg.withDefaults()}
 }
 
-func (d tlsmasqDialer) Dial(network, address string) (net.Conn, error) {
+func (d dialer) Dial(network, address string) (net.Conn, error) {
 	return d.DialContext(context.Background(), network, address)
 }
 
-func (d tlsmasqDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	ptlsDialer := ptlshs.WrapDialer(d.Dialer, d.ProxiedHandshakeConfig)
 	conn, err := ptlsDialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
-	return newTlsmasqConn(conn.(ptlshs.PtlshsConn), d.TLSConfig, true, d.ProxiedHandshakeConfig.Secret), nil
+	return newTlsmasqConn(conn.(ptlshs.Conn), d.TLSConfig, true, d.ProxiedHandshakeConfig.Secret), nil
 }
 
 // ListenerConfig specifies configuration for listening.
@@ -93,7 +93,7 @@ func (l listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	// We know the type assertion will succeed because we know l.Listener comes from ptlshs.
-	return newTlsmasqConn(conn.(ptlshs.PtlshsConn), l.TLSConfig, false, l.ProxiedHandshakeConfig.Secret), nil
+	return newTlsmasqConn(conn.(ptlshs.Conn), l.TLSConfig, false, l.ProxiedHandshakeConfig.Secret), nil
 }
 
 // WrapListener wraps the input listener with one which speaks the tlsmasq protocol. Accepted

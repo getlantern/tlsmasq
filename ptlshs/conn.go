@@ -16,12 +16,12 @@ import (
 	"github.com/getlantern/tlsutil"
 )
 
-// PtlshsConn is a network connection between two peers speaking the ptlshs protocol. Methods returning
+// Conn is a network connection between two peers speaking the ptlshs protocol. Methods returning
 // connection state data (TLSVersion, CipherSuite, etc.) block until the handshake is complete.
 //
 // Connections returned by listeners and dialers in this package will implement this interface.
 // However, most users of this package can ignore this type.
-type PtlshsConn interface {
+type Conn interface {
 	net.Conn
 
 	// Handshake executes the ptlshs handshake protocol, if it has not yet been performed. Note
@@ -89,7 +89,7 @@ type clientConn struct {
 }
 
 // Client initializes a client-side connection.
-func Client(toServer net.Conn, cfg DialerConfig) PtlshsConn {
+func Client(toServer net.Conn, cfg DialerConfig) Conn {
 	cfg = cfg.withDefaults()
 	return &clientConn{toServer, cfg, nil, nil, newOnce(), newOnce()}
 }
@@ -302,14 +302,14 @@ type serverConn struct {
 }
 
 // Server initializes a server-side connection.
-func Server(toClient net.Conn, cfg ListenerConfig) PtlshsConn {
+func Server(toClient net.Conn, cfg ListenerConfig) Conn {
 	cfg = cfg.withDefaults()
 	nc := newNonceCache(cfg.NonceSweepInterval)
 	return serverConnWithCache(toClient, cfg, nc, true)
 }
 
 // Ignores cfg.NonceSweepInterval.
-func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) PtlshsConn {
+func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
 	return &serverConn{
 		toClient, sync.RWMutex{}, cfg, cache, closeCache, nil,
 		newOnce(), newOnce(), newDeadline(), newDeadline(), sync.Mutex{}}
