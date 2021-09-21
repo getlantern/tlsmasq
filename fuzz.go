@@ -8,14 +8,14 @@ import (
 )
 
 func Fuzz(fuzzedData []byte) int {
-	seedAsBytes, clientHelloHandshake, err := fuzzutil.ReadClientHandshakeDataFromDump(fuzzedData)
+	seedAsBytes, clientHelloHandshake, err := fuzzutil.DecryptAndUnpackFuzzInput(fuzzedData)
 	if err != nil {
 		// This means the input data was badly-parsed. Return -1 so that
 		// go-fuzz doesn't continue with this permutation
 		return -1
 	}
 	seed := int64(binary.LittleEndian.Uint64(seedAsBytes))
-	err = fuzzutil.RunTestFuzz(seed, clientHelloHandshake)
+	err = fuzzutil.RunFuzz(seed, clientHelloHandshake)
 	if err != nil {
 		// Panic to indicate application-level errors
 		panic(err)
