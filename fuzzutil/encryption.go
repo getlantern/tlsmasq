@@ -9,7 +9,8 @@ import (
 	"fmt"
 )
 
-// XXX It's easy to see 0x4141414141414141 in a debugger
+// XXX AAAAAAAA == 0x4141414141414141 in hex. It's easy to see
+// 0x4141414141414141 in a debugger
 var SEPARATOR = []byte("AAAAAAAA")
 var AES128_NONCE_SIZE = 12
 var AES128_KEY_SIZE = 16
