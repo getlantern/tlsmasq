@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/getlantern/tlsmasq/projectpath"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,8 +96,7 @@ func TestGenerateClientHellos(t *testing.T) {
 		// Make a random identifier for each fuzz input directory
 		fileid, err := getSecureRandomIdentifier()
 		require.NoError(t, err)
-		fuzzOutDirPath := fmt.Sprintf(filepath.Join(projectpath.Root,
-			"fuzz_workdir/annotated_corpus", "%s"), fileid)
+		fuzzOutDirPath := fmt.Sprintf("../fuzz_workdir/annotated_corpus/%s", fileid)
 		require.NoError(t, os.MkdirAll(fuzzOutDirPath, os.ModePerm))
 
 		// For each config, make 5 permutations with different seeds
@@ -148,7 +146,7 @@ func TestGenerateClientHellos(t *testing.T) {
 func TestFuzz(t *testing.T) {
 	t.Parallel()
 
-	inputDir := filepath.Join(projectpath.Root, "fuzz_workdir/corpus")
+	inputDir := "../fuzz_workdir/corpus"
 	inputFiles, err := ioutil.ReadDir(inputDir)
 	require.NoError(t, err)
 	for _, f := range inputFiles {
