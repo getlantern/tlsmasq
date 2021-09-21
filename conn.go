@@ -9,6 +9,37 @@ import (
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
 
+// Conn is a network connection between two peers speaking the tlsmasq protocol.
+//
+// Connections returned by listeners and dialers in this package will implement this interface.
+// However, most users of this package can ignore this type.
+type Conn interface {
+	net.Conn
+
+	// Handshake executes the tlsmasq handshake protocol, if it has not yet been performed. Note
+	// that, per the protocol, the connection will proxy all data until the completion signal. Thus,
+	// if this connection comes from an active probe, this handshake function may not return until
+	// the probe closes the connection on its end. As a result, this function should be treated as
+	// one which may be long-running or never return.
+	Handshake() error
+}
+
+// Client initializes a client-side connection.
+func Client(conn net.Conn, cfg DialerConfig) Conn {
+	return newConn(
+		ptlshs.Client(conn, cfg.ProxiedHandshakeConfig),
+		cfg.TLSConfig, true, cfg.ProxiedHandshakeConfig.Secret,
+	)
+}
+
+// Server initializes a server-side connection.
+func Server(conn net.Conn, cfg ListenerConfig) Conn {
+	return newConn(
+		ptlshs.Server(conn, cfg.ProxiedHandshakeConfig),
+		cfg.TLSConfig, false, cfg.ProxiedHandshakeConfig.Secret,
+	)
+}
+
 type conn struct {
 	// A ptlshs.Conn until the handshake has occurred, then just a net.Conn.
 	net.Conn
