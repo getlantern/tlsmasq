@@ -48,7 +48,7 @@ type Conn interface {
 	IV() [16]byte
 }
 
-type ptlshsConnState struct {
+type connState struct {
 	version, suite uint16
 
 	seq [8]byte
@@ -57,7 +57,7 @@ type ptlshsConnState struct {
 	seqLock sync.Mutex
 }
 
-func (s *ptlshsConnState) nextSeq() [8]byte {
+func (s *connState) nextSeq() [8]byte {
 	s.seqLock.Lock()
 	defer s.seqLock.Unlock()
 
@@ -82,7 +82,7 @@ type clientConn struct {
 	cfg DialerConfig
 
 	// One of the following is initialized after Handshake().
-	state        *ptlshsConnState
+	state        *connState
 	handshakeErr error
 
 	shakeOnce, closeOnce *once
@@ -181,7 +181,7 @@ func (c *clientConn) handshake() error {
 	}
 	// We're overwriting concurrently accessed fields here. However, these are not used concurrently
 	// until the handshake is complete.
-	c.state = &ptlshsConnState{hsResult.Version, hsResult.CipherSuite, seq, iv, sync.Mutex{}}
+	c.state = &connState{hsResult.Version, hsResult.CipherSuite, seq, iv, sync.Mutex{}}
 	return nil
 }
 
@@ -292,7 +292,7 @@ type serverConn struct {
 	closeCache bool
 
 	// Initialized if the handshake completes successfully.
-	state *ptlshsConnState
+	state *connState
 
 	shakeOnce, closeOnce *once
 
@@ -706,9 +706,9 @@ func readClientHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 //	- A non-temporary network error is encountered.
 // Whatever was read is always returned. When a valid ServerHello is read, it is parsed and used to
 // create a connection state.
-func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte, *ptlshsConnState, error) {
+func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte, *connState, error) {
 	type result struct {
-		cs  *ptlshsConnState
+		cs  *connState
 		err error
 	}
 
@@ -733,7 +733,7 @@ func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 				if err != nil {
 					return result{nil, fmt.Errorf("failed to derive sequence and IV: %w", err)}
 				}
-				return result{&ptlshsConnState{version, suite, seq, iv, sync.Mutex{}}, nil}
+				return result{&connState{version, suite, seq, iv, sync.Mutex{}}, nil}
 			}
 			if !errors.Is(err, io.EOF) {
 				return result{nil, err}
