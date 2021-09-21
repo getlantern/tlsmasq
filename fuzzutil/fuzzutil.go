@@ -95,7 +95,7 @@ func RunFuzz(seed int64, clientHelloHandshake []byte) error {
 	msgFromServer, err := func() (string, error) {
 		// XXX client->tlsmasq: dial to tlsmasq's IP with dialerCfg
 		// This makes the tcp handshake
-		conn, err := tlsmasq.NewTlsMasqDialer(dialerCfg).Dial("tcp", l.Addr().String())
+		conn, err := tlsmasq.NewDialer(dialerCfg).Dial("tcp", l.Addr().String())
 		if err != nil {
 			return "", err
 		}
