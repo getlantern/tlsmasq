@@ -76,7 +76,7 @@ func TestListenAndDial(t *testing.T) {
 	}()
 
 	msgFromServer, clientErr := func() (string, error) {
-		conn, err := NewTlsMasqDialer(dialerCfg).Dial("tcp", l.Addr().String())
+		conn, err := NewDialer(dialerCfg).Dial("tcp", l.Addr().String())
 		if err != nil {
 			return "", fmt.Errorf("dial failed: %w", err)
 		}

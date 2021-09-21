@@ -52,7 +52,7 @@ func TestHandshake(t *testing.T) {
 			Secret: secret,
 		},
 	}
-	clientConn := newTlsmasqConn(
+	clientConn := newConn(
 		ptlshs.Client(
 			clientTransport,
 			clientDialerCfg.ProxiedHandshakeConfig),
@@ -69,7 +69,7 @@ func TestHandshake(t *testing.T) {
 			Secret:     secret,
 		},
 	}
-	serverConn := newTlsmasqConn(
+	serverConn := newConn(
 		ptlshs.Server(
 			serverTransport,
 			listenerCfg.ProxiedHandshakeConfig),

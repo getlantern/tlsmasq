@@ -20,7 +20,7 @@ type conn struct {
 	handshakeErr error
 }
 
-func newTlsmasqConn(c ptlshs.Conn, cfg *tls.Config, isClient bool, preshared ptlshs.Secret) *conn {
+func newConn(c ptlshs.Conn, cfg *tls.Config, isClient bool, preshared ptlshs.Secret) *conn {
 	return &conn{c, cfg, isClient, preshared, sync.Once{}, nil}
 }
 
