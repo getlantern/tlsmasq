@@ -29,3 +29,4 @@ tlsmasq-fuzz.zip:
 
 clean:
 	rm -rf ./tlsmasq-fuzz.zip
+	go clean -testcache
