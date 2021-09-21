@@ -82,8 +82,6 @@ func (c *conn) Handshake() error {
 			c.handshakeErr = err
 			return
 		}
-		// We're writing to a concurrently accessed field, but handshake() is
-		// protected by c.shakeOnce.
 		c.Conn = hijacked
 	})
 	return c.handshakeErr
