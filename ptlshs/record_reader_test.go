@@ -7,6 +7,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,7 +114,7 @@ func createRecordStream(t *testing.T, dataRecords int) []byte {
 	serverTCP := newRecordingConn(_serverTCP)
 
 	client := tls.Client(clientTCP, &tls.Config{InsecureSkipVerify: true})
-	server := tls.Server(serverTCP, &tls.Config{Certificates: []tls.Certificate{cert}})
+	server := tls.Server(serverTCP, &tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
 	defer server.Close()
 	defer client.Close()
 

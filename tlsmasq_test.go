@@ -1,11 +1,12 @@
 package tlsmasq
 
 import (
-	"crypto/rand"
+	cryptoRand "crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+
 	"testing"
 
 	"github.com/getlantern/tlsmasq/internal/testutil"
@@ -18,16 +19,17 @@ func TestListenAndDial(t *testing.T) {
 	t.Parallel()
 
 	var (
-		secret [52]byte
-		// wg                   = new(sync.WaitGroup)
+		secret               [52]byte
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
 
-	_, err := rand.Read(secret[:])
+	_, err := cryptoRand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
-	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
+	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
+	require.NoError(t, err)
+	defer origin.Close()
+	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{testutil.Cert}}
 	dialerCfg := DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
 			Handshaker: ptlshs.StdLibHandshaker{
@@ -75,7 +77,7 @@ func TestListenAndDial(t *testing.T) {
 	}()
 
 	msgFromServer, clientErr := func() (string, error) {
-		conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
+		conn, err := NewDialer(dialerCfg).Dial("tcp", l.Addr().String())
 		if err != nil {
 			return "", fmt.Errorf("dial failed: %w", err)
 		}

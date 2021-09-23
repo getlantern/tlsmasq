@@ -30,15 +30,19 @@ func TestHandshake(t *testing.T) {
 			MinVersion:         version,
 			MaxVersion:         version,
 			CipherSuites:       []uint16{suite},
-			Certificates:       []tls.Certificate{cert},
+			Certificates:       []tls.Certificate{testutil.Cert},
 		}
 		secret ptlshs.Secret
 	)
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, tlsCfg)
+	origin, err := testutil.StartOrigin(tlsCfg)
+	require.NoError(t, err)
+	defer origin.Close()
 	clientTransport, serverTransport := testutil.BufferedPipe()
+
+	// Client Init
 	clientConn := Client(clientTransport, DialerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
@@ -48,15 +52,24 @@ func TestHandshake(t *testing.T) {
 			Secret: secret,
 		},
 	})
-	serverConn := Server(serverTransport, ListenerConfig{
+	defer clientConn.Close()
+
+	// ServerInit Init
+	listenerCfg := ListenerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
 			DialOrigin: origin.DialContext,
 			Secret:     secret,
 		},
-	})
+	}
+	serverConn := newConn(
+		ptlshs.Server(
+			serverTransport,
+			listenerCfg.ProxiedHandshakeConfig),
+		listenerCfg.TLSConfig, false,
+		listenerCfg.ProxiedHandshakeConfig.Secret,
+	)
 	defer serverConn.Close()
-	defer clientConn.Close()
 
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- serverConn.Handshake() }()

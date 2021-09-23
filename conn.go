@@ -69,19 +69,20 @@ func (c *conn) Write(b []byte) (n int, err error) {
 	return c.Conn.Write(b)
 }
 
+// Handshake executes the tlsmasq handshake protocol, if it has not yet been
+// performed. Note that, per the protocol, the connection will proxy all data
+// until the completion signal. Thus, if this connection comes from an active
+// probe, this handshake function may not return until the probe closes the
+// connection on its end. As a result, this function should be treated as one
+// which may be long-running or never return.
 func (c *conn) Handshake() error {
 	c.shakeOnce.Do(func() {
-		c.handshakeErr = c.handshake()
+		hijacked, err := hijack(c.Conn.(ptlshs.Conn), c.cfg, c.preshared, c.isClient)
+		if err != nil {
+			c.handshakeErr = err
+			return
+		}
+		c.Conn = hijacked
 	})
 	return c.handshakeErr
-}
-
-func (c *conn) handshake() error {
-	hijacked, err := hijack(c.Conn.(ptlshs.Conn), c.cfg, c.preshared, c.isClient)
-	if err != nil {
-		return err
-	}
-	// We're writing to a concurrently accessed field, but handshake() is protected by c.shakeOnce.
-	c.Conn = hijacked
-	return nil
 }

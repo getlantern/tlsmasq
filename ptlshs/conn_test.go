@@ -22,7 +22,7 @@ import (
 func TestConn(t *testing.T) {
 	pm := pipeMaker{
 		t:            t,
-		originConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+		originConfig: &tls.Config{Certificates: []tls.Certificate{testutil.Cert}},
 	}
 	t.Run("ClientFirst", func(t *testing.T) { nettest.TestConn(t, pm.clientFirstPipe) })
 	t.Run("ServerFirst", func(t *testing.T) { nettest.TestConn(t, pm.serverFirstPipe) })
@@ -43,16 +43,18 @@ func TestHandshake(t *testing.T) {
 			MinVersion:         version,
 			MaxVersion:         version,
 			CipherSuites:       []uint16{suite},
-			Certificates:       []tls.Certificate{cert},
+			Certificates:       []tls.Certificate{testutil.Cert},
 		}
 		secret Secret
 	)
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, tlsCfg)
+	origin, err := testutil.StartOrigin(tlsCfg)
+	require.NoError(t, err)
+	defer origin.Close()
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
+	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0, false, nil})
 	serverConn := Server(serverTransport, ListenerConfig{
 		DialOrigin: origin.DialContext,
 		Secret:     secret,
@@ -131,7 +133,7 @@ func testUnblockHelper(testClient, testClose bool) func(t *testing.T) {
 				MinVersion:         version,
 				MaxVersion:         version,
 				CipherSuites:       []uint16{suite},
-				Certificates:       []tls.Certificate{cert},
+				Certificates:       []tls.Certificate{testutil.Cert},
 			}
 			clientTransport, serverTransport = testutil.BufferedPipe()
 			secret                           Secret
@@ -142,10 +144,12 @@ func testUnblockHelper(testClient, testClose bool) func(t *testing.T) {
 		require.NoError(t, err)
 
 		if testClient {
-			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
+			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0, false, nil})
 			peerConn = tls.Server(serverTransport, tlsCfg)
 		} else {
-			origin := testutil.StartOrigin(t, tlsCfg)
+			origin, err := testutil.StartOrigin(tlsCfg)
+			require.NoError(t, err)
+			defer origin.Close()
 			peerConn = tls.Client(clientTransport, tlsCfg)
 			testConn = Server(serverTransport, ListenerConfig{origin.DialContext, secret, 0, nil})
 		}
@@ -193,8 +197,10 @@ func (pm pipeMaker) makePipe() (client, server net.Conn, stop func(), err error)
 		return nil, nil, nil, fmt.Errorf("failed to generate secret: %w", err)
 	}
 
-	origin := testutil.StartOrigin(pm.t, pm.originConfig.Clone())
-	dCfg := DialerConfig{secret, StdLibHandshaker{Config: &tls.Config{InsecureSkipVerify: true}}, 0}
+	origin, err := testutil.StartOrigin(pm.originConfig.Clone())
+	require.NoError(pm.t, err)
+	defer origin.Close()
+	dCfg := DialerConfig{secret, StdLibHandshaker{Config: &tls.Config{InsecureSkipVerify: true}}, 0, false, nil}
 	lCfg := ListenerConfig{origin.DialContext, secret, 0, nil}
 
 	clientTransport, serverTransport := net.Pipe()

@@ -3,34 +3,29 @@ package testutil
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
+	"strings"
 	"sync"
-	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 // TLSOrigin serves as a TLS origin, useful for proxying handshakes. Closes when the test completes.
 type TLSOrigin struct {
 	net.Listener
-	logger        *SafeTestLogger
-	t             *testing.T
 	postHandshake func(net.Conn) error
-
 	sync.Mutex
 }
 
-// StartOrigin starts a TLSOrigin. There is no need to call Close on the returned origin.
-func StartOrigin(t *testing.T, cfg *tls.Config) *TLSOrigin {
-	t.Helper()
-
+// StartOrigin starts a TLSOrigin. Caller must call TLSOrigin.Close()
+func StartOrigin(cfg *tls.Config) (*TLSOrigin, error) {
 	l, err := tls.Listen("tcp", "localhost:0", cfg)
-	require.NoError(t, err)
-	t.Cleanup(func() { l.Close() })
+	if err != nil {
+		return nil, err
+	}
 
-	o := &TLSOrigin{l, NewSafeLogger(t), t, nil, sync.Mutex{}}
+	o := &TLSOrigin{l, nil, sync.Mutex{}}
 	go o.listenAndServe()
-	return o
+	return o, nil
 }
 
 // DialContext dials the origin.
@@ -57,23 +52,26 @@ func (o *TLSOrigin) listenAndServe() {
 		c, err := o.Accept()
 		connections++
 		if err != nil {
-			o.logger.Logf("origin accept error for connection %d: %v", connections, err)
-			return
+			switch {
+			// This happens normally when the listener is closed
+			case strings.Contains(err.Error(), "use of closed network connection"):
+				return
+			default:
+				panic(fmt.Sprintf("origin accept error for connection %d: %v\n", connections, err))
+			}
 		}
-		o.t.Cleanup(func() { c.Close() })
 		go func(conn net.Conn, number int) {
 			if err := conn.(*tls.Conn).Handshake(); err != nil {
-				o.logger.Logf("origin handshake error for connection %d: %v", number, err)
-				return
+				panic(fmt.Sprintf("origin handshake error for connection %d: %v\n", number, err))
 			}
 			postHandshake := o.getPostHandshake()
 			if postHandshake == nil {
 				return
 			}
 			if err := postHandshake(conn); err != nil {
-				o.logger.Logf("origin post-handshake error for connection %d: %v", number, err)
-				return
+				panic(fmt.Sprintf("origin post-handshake error for connection %d: %v\n", number, err))
 			}
+			c.Close()
 		}(c, connections)
 	}
 }
