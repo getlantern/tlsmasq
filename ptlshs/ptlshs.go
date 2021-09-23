@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net"
 	"time"
+
+	"github.com/getlantern/tlsmasq/fuzzutil"
 )
 
 const (
@@ -113,6 +115,11 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, err
 	}
+	if d.DialerConfig.UseFuzzEchoConn {
+		conn = fuzzutil.NewFuzzEchoConn("client->tlsmasq", conn,
+			d.DialerConfig.FuzzEchoClientHelloData)
+	}
+
 	return Client(conn, d.DialerConfig), nil
 }
 
