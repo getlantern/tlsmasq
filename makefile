@@ -6,9 +6,9 @@ all: build
 build:
 	go build
 
-#: runs `fuzzutil/fuzzutil_test.go:TestGenerateClientHellos` as a standalone program to generate fuzz input. See "On Fuzzing" section in the README for more info
+#: runs `fuzz/fuzz_test.go:TestGenerateClientHellos` as a standalone program to generate fuzz input. See "On Fuzzing" section in the README for more info
 generate-fuzz-input:
-	(cd fuzzutil; DO=1 go test -run TestGenerateClientHellos)
+	(cd fuzz; DO=1 go test -run TestGenerateClientHellos)
 	@echo "Fuzz input generated and automatically propagated to ./fuzz_workdir/annotated_corpus"
 
 #: Run all tests
@@ -25,7 +25,7 @@ prep-corpus:
 tlsmasq-fuzz.zip:
 	go get github.com/dvyukov/go-fuzz/go-fuzz
 	go get github.com/dvyukov/go-fuzz/go-fuzz-build
-	go-fuzz-build -o tlsmasq-fuzz.zip github.com/getlantern/tlsmasq/fuzzutil
+	go-fuzz-build -o tlsmasq-fuzz.zip github.com/getlantern/tlsmasq/fuzz
 
 clean:
 	rm -rf ./tlsmasq-fuzz.zip
