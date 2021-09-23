@@ -1,20 +1,27 @@
 // +build gofuzz
 
-package fuzzutil
+package fuzz
 
 import (
 	"encoding/binary"
+	"github.com/getlantern/tlsmasq/fuzzutil"
 )
 
+// Fuzz is the entrypoint for [go-fuzz](https://github.com/dvyukov/go-fuzz) to run.
+// 'fuzzedData' are mutated versions of the input corpus in
+// fuzz_workdir/corpus, which is assembled from fuzz_workdir/annotated_corpus
+// when running `make run-fuzz`.
+//
+// To run this function, just run `make run-fuzz`
 func Fuzz(fuzzedData []byte) int {
-	seedAsBytes, clientHelloHandshake, err := DecryptAndUnpackFuzzInput(fuzzedData)
+	seedAsBytes, clientHelloHandshake, err := fuzzutil.DecryptAndUnpackFuzzInput(fuzzedData)
 	if err != nil {
 		// This means the input data was badly-parsed. Return -1 so that
 		// go-fuzz doesn't continue with this permutation
 		return -1
 	}
 	seed := int64(binary.LittleEndian.Uint64(seedAsBytes))
-	err = RunFuzz(seed, clientHelloHandshake)
+	err = RunTlsmasqProtocolWithInjectedClientHello(seed, clientHelloHandshake)
 	if err != nil {
 		// Panic to indicate application-level errors
 		panic(err)

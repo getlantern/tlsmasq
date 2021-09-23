@@ -16,7 +16,7 @@ var AES128_NONCE_SIZE = 12
 var AES128_KEY_SIZE = 16
 var CONFIG_SIZE = 8
 
-func getSecureRandomByteSlice(size int) ([]byte, error) {
+func GetSecureRandomByteSlice(size int) ([]byte, error) {
 	b := make([]byte, size)
 	_, err := cryptoRand.Read(b)
 	if err != nil {
@@ -25,7 +25,7 @@ func getSecureRandomByteSlice(size int) ([]byte, error) {
 	return b, nil
 }
 
-func getSecureRandomIdentifier() (string, error) {
+func GetSecureRandomIdentifier() (string, error) {
 	s := make([]byte, 4)
 	_, err := cryptoRand.Read(s)
 	if err != nil {
@@ -34,7 +34,7 @@ func getSecureRandomIdentifier() (string, error) {
 	return hex.EncodeToString(s), nil
 }
 
-func encryptFuzzConfig(plaintext []byte) (nonce []byte, key []byte, ciphertext []byte, err error) {
+func EncryptFuzzConfig(plaintext []byte) (nonce []byte, key []byte, ciphertext []byte, err error) {
 	nonce = make([]byte, AES128_NONCE_SIZE)
 	_, err = cryptoRand.Read(nonce)
 	if err != nil {
@@ -65,7 +65,7 @@ func encryptFuzzConfig(plaintext []byte) (nonce []byte, key []byte, ciphertext [
 //	  nonce | key | AES(seed) | SEPARATOR | clientHelloData
 //
 // See 'On Fuzzing -> Fuzzing Internals' in the README for a lengthy breakdown
-func packFuzzInput(nonce, key, encryptedConfig, clientHelloData []byte) []byte {
+func PackFuzzInput(nonce, key, encryptedConfig, clientHelloData []byte) []byte {
 	var b bytes.Buffer
 	b.Write(nonce)
 	b.Write(key)

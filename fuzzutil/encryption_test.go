@@ -12,9 +12,9 @@ func TestEncryption(t *testing.T) {
 	config := make([]byte, CONFIG_SIZE)
 	_, err := cryptoRand.Read(config)
 	require.NoError(t, err)
-	nonce, key, encryptedConfig, err := encryptFuzzConfig(config)
+	nonce, key, encryptedConfig, err := EncryptFuzzConfig(config)
 	require.NoError(t, err)
-	fuzzInput := packFuzzInput(nonce, key, encryptedConfig, []byte{})
+	fuzzInput := PackFuzzInput(nonce, key, encryptedConfig, []byte{})
 
 	decryptedConfig, clientHelloData, err := DecryptAndUnpackFuzzInput(fuzzInput)
 	require.NoError(t, err)
