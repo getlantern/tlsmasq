@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/getlantern/preconn"
+	"github.com/getlantern/tlsmasq/fuzz"
 	"github.com/getlantern/tlsutil"
 )
 
@@ -163,11 +164,11 @@ func (c *clientConn) handshake() error {
 		return fmt.Errorf("failed to derive sequence and IV: %w", err)
 	}
 	tlsState, err := tlsutil.NewConnectionState(
-		hsResult.Version, hsResult.CipherSuite, c.cfg.Secret, iv, seq)
+		hsResult.Version, hsResult.CipherSuite, c.cfg.Secret, iv, seq, c.cfg.RandReader)
 	if err != nil {
 		return fmt.Errorf("failed to read TLS connection state: %w", err)
 	}
-	signal, err := newClientSignal(c.cfg.NonceTTL)
+	signal, err := newClientSignal(c.cfg.RandReader, c.cfg.NonceTTL)
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
 	}
@@ -310,6 +311,9 @@ func Server(toClient net.Conn, cfg ListenerConfig) Conn {
 
 // Ignores cfg.NonceSweepInterval.
 func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCache, closeCache bool) Conn {
+	if cfg.UseEchoConn {
+		toClient = fuzz.NewEchoConn("tlsmasq_client", toClient, cfg.EchoData)
+	}
 	return &serverConn{
 		toClient, sync.RWMutex{}, cfg, cache, closeCache, nil,
 		newOnce(), newOnce(), newDeadline(), newDeadline(), sync.Mutex{}}
@@ -484,7 +488,7 @@ func (c *serverConn) handshake() error {
 		return fmt.Errorf("failed to parse ServerHello: %w", err)
 	}
 	tlsState, err := tlsutil.NewConnectionState(
-		c.state.version, c.state.suite, c.cfg.Secret, c.state.iv, c.state.seq)
+		c.state.version, c.state.suite, c.cfg.Secret, c.state.iv, c.state.seq, c.cfg.RandReader)
 	if err != nil {
 		return fmt.Errorf("failed to init conn state based on hello info: %w", err)
 	}
@@ -500,7 +504,7 @@ func (c *serverConn) handshake() error {
 
 	// Send our own completion signal.
 	transcriptLock.Lock()
-	signal, err := newServerSignal(transcriptHMAC.Sum(nil))
+	signal, err := newServerSignal(c.cfg.RandReader, transcriptHMAC.Sum(nil))
 	transcriptLock.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to create completion signal: %w", err)
@@ -567,7 +571,12 @@ func (c *serverConn) watchForCompletion(ctx context.Context, bufferSize int,
 
 		// We stop both copy routines by closing the connection to the origin server. We first
 		// attempt to flush any unprocessed data.
-		toOrigin.Write(preSignal)
+		// TODO This is weird: it used to be writing preSignal if preSignal was
+		// zero. Shouldn't we check if there's need to write this **before**
+		// running and closing connections?
+		if len(preSignal) != 0 {
+			toOrigin.Write(preSignal)
+		}
 		toOrigin.Close()
 
 		// We also need to ensure the unprocessed post-signal data is not lost. We prepend it to
@@ -792,6 +801,13 @@ func (c mitmConn) Read(b []byte) (n int, err error) {
 		}
 	}
 	return
+}
+
+func maxOfTwoInts(a, b int) int {
+	if a >= b {
+		return a
+	}
+	return b
 }
 
 func (c mitmConn) Write(b []byte) (n int, err error) {

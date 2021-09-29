@@ -1,46 +1,96 @@
 package tlsmasq
 
 import (
-	"crypto/rand"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	mathRand "math/rand"
+	"net"
+	"os"
 	"testing"
 
+	"github.com/getlantern/tlsmasq/fuzz"
 	"github.com/getlantern/tlsmasq/internal/testutil"
 	"github.com/getlantern/tlsmasq/ptlshs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestListenAndDial(t *testing.T) {
-	t.Parallel()
+func init() {
+	mathRand.Seed(0)
+	log.Println("Generation done")
+}
 
+func TestRecord(t *testing.T) {
+	os.RemoveAll("./tmp")
+	require.NoError(t, fuzz.InitRecording())
+	runFuzz(t, "")
+	require.NoError(t, fuzz.AssemblePackets())
+}
+
+func TestFuzz(t *testing.T) {
+	runFuzz(t, "./tmp/assembled.dat")
+}
+
+func runFuzz(t *testing.T, fuzzDataFile string) {
 	var (
 		secret [52]byte
 		// wg                   = new(sync.WaitGroup)
 		clientMsg, serverMsg = "hello from the client", "hello from the server"
 	)
-
-	_, err := rand.Read(secret[:])
+	constantRandReader := fuzz.MathRandReader(0)
+	_, err := constantRandReader.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}}, nil)
-	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{cert}}
+	var clientFuzzData, tlsmasqToOriginFuzzData,
+		originFuzzData, tlsmasqToClientFuzzData []byte
+	if fuzzDataFile != "" {
+		fuzzData, err := os.ReadFile(fuzzDataFile)
+		require.NoError(t, err)
+		clientFuzzData, tlsmasqToOriginFuzzData,
+			originFuzzData, tlsmasqToClientFuzzData, err = fuzz.ExtractConnDataFromFuzzData(fuzzData)
+		require.NoError(t, err)
+		log.Println(len(clientFuzzData))
+		log.Println(len(tlsmasqToOriginFuzzData))
+		log.Println(len(originFuzzData))
+		log.Println(len(tlsmasqToClientFuzzData))
+	}
+
+	origin := testutil.StartOrigin(t, &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		Rand:         constantRandReader,
+	}, originFuzzData)
+	insecureTLSConfig := &tls.Config{
+		InsecureSkipVerify: true,
+		Certificates:       []tls.Certificate{cert},
+		Rand:               constantRandReader,
+	}
 	dialerCfg := DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
 			Handshaker: ptlshs.StdLibHandshaker{
 				Config: insecureTLSConfig,
 			},
-			Secret: secret,
+			Secret:     secret,
+			RandReader: constantRandReader,
 		},
 		TLSConfig: insecureTLSConfig,
 	}
 	listenerCfg := ListenerConfig{
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
-			DialOrigin: origin.DialContext,
-			Secret:     secret,
+			DialOrigin: func(ctx context.Context) (net.Conn, error) {
+				c, err := (&net.Dialer{}).DialContext(ctx, "tcp", origin.Addr().String())
+				if err != nil {
+					return nil, err
+				}
+				return fuzz.NewEchoConn("tlsmasq_origin", c, tlsmasqToOriginFuzzData), nil
+			},
+			Secret:      secret,
+			RandReader:  constantRandReader,
+			UseEchoConn: true,
+			EchoData:    tlsmasqToClientFuzzData,
 		},
 		TLSConfig: insecureTLSConfig,
 	}
@@ -75,7 +125,7 @@ func TestListenAndDial(t *testing.T) {
 	}()
 
 	msgFromServer, clientErr := func() (string, error) {
-		conn, err := Dial("tcp", l.Addr().String(), dialerCfg, nil)
+		conn, err := Dial("tcp", l.Addr().String(), dialerCfg, clientFuzzData)
 		if err != nil {
 			return "", fmt.Errorf("dial failed: %w", err)
 		}

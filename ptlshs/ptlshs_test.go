@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	cryptoRand "crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -28,7 +29,7 @@ func TestListenAndDial(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}}, nil)
 
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
@@ -102,7 +103,7 @@ func TestSessionResumption(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}}, nil)
 	handshaker := &resumptionCheckingHandshaker{
 		Config: &tls.Config{
 			InsecureSkipVerify: true,
@@ -110,7 +111,7 @@ func TestSessionResumption(t *testing.T) {
 			MaxVersion:         tls.VersionTLS12,
 		},
 	}
-	dialerCfg := DialerConfig{secret, handshaker, 0}
+	dialerCfg := DialerConfig{secret, handshaker, 0, false, nil, cryptoRand.Reader}
 	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
@@ -181,7 +182,7 @@ func TestSignalReplay(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}}, nil)
 	origin.DoPostHandshake(func(conn net.Conn) error {
 		if _, err := conn.Write([]byte(originMsg)); err != nil {
 			return fmt.Errorf("write error %v", err)
@@ -223,7 +224,7 @@ func TestSignalReplay(t *testing.T) {
 		}
 
 		connState, err := tlsutil.NewConnectionState(
-			serverHello.Version, serverHello.Suite, secret, iv, seq)
+			serverHello.Version, serverHello.Suite, secret, iv, seq, cryptoRand.Reader)
 		if err != nil {
 			return fmt.Errorf("failed to create new connection state in onServerRead: %w", err)
 		}
@@ -340,7 +341,7 @@ func TestPostHandshakeData(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}}, nil)
 	origin.DoPostHandshake(func(conn net.Conn) error {
 		if _, err := conn.Write([]byte("some nonsense from the origin")); err != nil {
 			return fmt.Errorf("write error: %w", err)
@@ -441,10 +442,10 @@ func TestPostHandshakeInjection(t *testing.T) {
 		require.NoError(t, err)
 	}
 	injectorState, err := tlsutil.NewConnectionState(
-		tls.VersionTLS12, tls.TLS_CHACHA20_POLY1305_SHA256, injectorSecret, injectorIV, injectorSeq)
+		tls.VersionTLS12, tls.TLS_CHACHA20_POLY1305_SHA256, injectorSecret, injectorIV, injectorSeq, cryptoRand.Reader)
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}})
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{cert}}, nil)
 	dialerCfg := DialerConfig{
 		Handshaker: StdLibHandshaker{
 			Config: &tls.Config{InsecureSkipVerify: true},
@@ -491,7 +492,7 @@ func TestPostHandshakeInjection(t *testing.T) {
 		}
 
 		connState, err := tlsutil.NewConnectionState(
-			serverHello.Version, serverHello.Suite, secret, iv, seq)
+			serverHello.Version, serverHello.Suite, secret, iv, seq, cryptoRand.Reader)
 		if err != nil {
 			return fmt.Errorf("failed to create new connection state in onServerRead: %w", err)
 		}

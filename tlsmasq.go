@@ -66,7 +66,9 @@ func WrapDialer(d Dialer, cfg DialerConfig) Dialer {
 }
 
 // Dial a tlsmasq listener. This will result in a TLS connection with the peer.
-func Dial(network, address string, cfg DialerConfig) (net.Conn, error) {
+func Dial(network, address string, cfg DialerConfig, clientFuzzData []byte) (net.Conn, error) {
+	cfg.ProxiedHandshakeConfig.UseEchoConn = true
+	cfg.ProxiedHandshakeConfig.EchoData = clientFuzzData
 	return WrapDialer(&net.Dialer{}, cfg).Dial(network, address)
 }
 

@@ -3,11 +3,12 @@ package ptlshs
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"hash"
-	"math/big"
+	"io"
+	"sync"
 	"time"
 )
 
@@ -43,31 +44,39 @@ const (
 
 // Initialized in init. We narrow the range so that the server responses are somewhat consistent.
 var minSignalLenServer, maxSignalLenServer int
+var initPackageOnce sync.Once
 
-func init() {
+func initPackage(randReader io.Reader) error {
 	// Choose a random number in range to serve as the minimum for this runtime.
 	var (
 		err    error
 		absMin = absMinSignalLenServer
 		absMax = absMaxSignalLenServer - serverSignalLenSpread
 	)
-	minSignalLenServer, err = randInt(absMin, absMax)
+	minSignalLenServer, err = randInt(randReader, absMin, absMax)
 	if err != nil {
-		panic(fmt.Sprintf("failed to initialize random server signal length: %v", err))
+		return fmt.Errorf("failed to initialize random server signal length: %v", err)
 	}
 	maxSignalLenServer = minSignalLenServer + serverSignalLenSpread
+	return nil
 }
 
 var signalPrefix = []byte("handshake complete")
 
 type clientSignal []byte
 
-func newClientSignal(ttl time.Duration) (*clientSignal, error) {
-	nonce, err := newNonce(ttl)
+func newClientSignal(randReader io.Reader, ttl time.Duration) (*clientSignal, error) {
+	initPackageOnce.Do(func() {
+		err := initPackage(randReader)
+		if err != nil {
+			panic(err.Error())
+		}
+	})
+	nonce, err := newNonce(randReader, ttl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
-	sLen, err := randInt(minSignalLenClient, maxSignalLenClient)
+	sLen, err := randInt(randReader, minSignalLenClient, maxSignalLenClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate random signal length: %w", err)
 	}
@@ -98,8 +107,14 @@ func (cs clientSignal) getNonce() nonce {
 
 type serverSignal []byte
 
-func newServerSignal(transcriptHMACSHA256 []byte) (*serverSignal, error) {
-	sLen, err := randInt(minSignalLenServer, maxSignalLenServer)
+func newServerSignal(randReader io.Reader, transcriptHMACSHA256 []byte) (*serverSignal, error) {
+	initPackageOnce.Do(func() {
+		err := initPackage(randReader)
+		if err != nil {
+			panic(err.Error())
+		}
+	})
+	sLen, err := randInt(randReader, minSignalLenServer, maxSignalLenServer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate random signal length: %w", err)
 	}
@@ -130,11 +145,17 @@ func signalHMAC(s Secret) hash.Hash {
 	return hmac.New(sha256.New, s[:])
 }
 
+// https://git.musl-libc.org/cgit/musl/tree/include/stdlib.h#n82
+const RAND_MAX = 0x7fffffff
+
 // Generates a random integer in [min, max) using crypto/rand. Panics if max-min <= 0.
-func randInt(min, max int) (int, error) {
-	delta, err := rand.Int(rand.Reader, big.NewInt(int64(max-min)))
+func randInt(randReader io.Reader, min, max int) (int, error) {
+	b := make([]byte, 4) // sizeof(int) = 4
+	_, err := randReader.Read(b)
 	if err != nil {
 		return 0, err
 	}
-	return int(delta.Int64()) + min, nil
+	x, _ := binary.Varint(b)
+	// http://c-faq.com/lib/randrange.html
+	return min + int(x)/(RAND_MAX/(max-min+1)+1), nil
 }

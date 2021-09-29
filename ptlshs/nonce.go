@@ -1,9 +1,9 @@
 package ptlshs
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 )
@@ -18,10 +18,10 @@ import (
 // by the client after a completed handshake) is not replayable.
 type nonce [32]byte
 
-func newNonce(ttl time.Duration) (*nonce, error) {
+func newNonce(randReader io.Reader, ttl time.Duration) (*nonce, error) {
 	n := nonce{}
 	binary.LittleEndian.PutUint64(n[:], uint64(time.Now().Add(ttl).UnixNano()))
-	if _, err := rand.Read(n[8:]); err != nil {
+	if _, err := randReader.Read(n[8:]); err != nil {
 		return nil, fmt.Errorf("failed to generate random bytes: %w", err)
 	}
 	return &n, nil

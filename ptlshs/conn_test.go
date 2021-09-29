@@ -2,7 +2,7 @@ package ptlshs
 
 import (
 	"context"
-	"crypto/rand"
+	cryptoRand "crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -47,12 +47,12 @@ func TestHandshake(t *testing.T) {
 		}
 		secret Secret
 	)
-	_, err := rand.Read(secret[:])
+	_, err := cryptoRand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin := testutil.StartOrigin(t, tlsCfg)
+	origin := testutil.StartOrigin(t, tlsCfg, nil)
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
+	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0, false, nil, cryptoRand.Reader})
 	serverConn := Server(serverTransport, ListenerConfig{
 		DialOrigin: origin.DialContext,
 		Secret:     secret,
@@ -81,15 +81,15 @@ func TestIssue17(t *testing.T) {
 		seq1, seq2       [8]byte
 	)
 	for _, b := range [][]byte{secret1[:], secret2[:], iv1[:], iv2[:], seq1[:], seq2[:]} {
-		_, err := rand.Read(b)
+		_, err := cryptoRand.Read(b)
 		require.NoError(t, err)
 	}
-	writerState, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
+	writerState, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2, cryptoRand.Reader)
 	require.NoError(t, err)
-	readerState, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2)
+	readerState, err := tlsutil.NewConnectionState(version, suite, secret2, iv2, seq2, cryptoRand.Reader)
 	require.NoError(t, err)
 
-	sig, err := newClientSignal(time.Hour)
+	sig, err := newClientSignal(cryptoRand.Reader, time.Hour)
 	require.NoError(t, err)
 
 	clientTransport, serverTransport := testutil.BufferedPipe()
@@ -138,16 +138,16 @@ func testUnblockHelper(testClient, testClose bool) func(t *testing.T) {
 			testConn                         net.Conn
 			peerConn                         *tls.Conn
 		)
-		_, err := rand.Read(secret[:])
+		_, err := cryptoRand.Read(secret[:])
 		require.NoError(t, err)
 
 		if testClient {
-			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
+			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0, false, nil, cryptoRand.Reader})
 			peerConn = tls.Server(serverTransport, tlsCfg)
 		} else {
-			origin := testutil.StartOrigin(t, tlsCfg)
+			origin := testutil.StartOrigin(t, tlsCfg, nil)
 			peerConn = tls.Client(clientTransport, tlsCfg)
-			testConn = Server(serverTransport, ListenerConfig{origin.DialContext, secret, 0, nil})
+			testConn = Server(serverTransport, ListenerConfig{origin.DialContext, secret, 0, nil, false, nil, cryptoRand.Reader})
 		}
 		defer testConn.Close()
 		defer peerConn.Close()
@@ -189,13 +189,13 @@ type pipeMaker struct {
 // Implements nettest.MakePipe.
 func (pm pipeMaker) makePipe() (client, server net.Conn, stop func(), err error) {
 	var secret Secret
-	if _, err := rand.Read(secret[:]); err != nil {
+	if _, err := cryptoRand.Read(secret[:]); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to generate secret: %w", err)
 	}
 
-	origin := testutil.StartOrigin(pm.t, pm.originConfig.Clone())
-	dCfg := DialerConfig{secret, StdLibHandshaker{Config: &tls.Config{InsecureSkipVerify: true}}, 0}
-	lCfg := ListenerConfig{origin.DialContext, secret, 0, nil}
+	origin := testutil.StartOrigin(pm.t, pm.originConfig.Clone(), nil)
+	dCfg := DialerConfig{secret, StdLibHandshaker{Config: &tls.Config{InsecureSkipVerify: true}}, 0, false, nil, cryptoRand.Reader}
+	lCfg := ListenerConfig{origin.DialContext, secret, 0, nil, false, nil, cryptoRand.Reader}
 
 	clientTransport, serverTransport := net.Pipe()
 	client = Client(clientTransport, dCfg)
@@ -267,7 +267,7 @@ func (do *dummyOrigin) SetWriteDeadline(_ time.Time) error { return nil }
 
 func randomDuration(t *testing.T, max time.Duration) time.Duration {
 	t.Helper()
-	n, err := randInt(0, int(max))
+	n, err := randInt(cryptoRand.Reader, 0, int(max))
 	require.NoError(t, err)
 	return time.Duration(n)
 }

@@ -39,7 +39,7 @@ func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret, client b
 	if err != nil {
 		return nil, err
 	}
-	disguisedConn, err := disguise(conn, preshared)
+	disguisedConn, err := disguise(conn, preshared, cfg.Rand)
 	if err != nil {
 		return nil, err
 	}
@@ -121,9 +121,9 @@ type disguisedConn struct {
 	standardRead func([]byte) (int, error)
 }
 
-func disguise(conn ptlshs.Conn, preshared ptlshs.Secret) (*disguisedConn, error) {
+func disguise(conn ptlshs.Conn, preshared ptlshs.Secret, randReader io.Reader) (*disguisedConn, error) {
 	state, err := tlsutil.NewConnectionState(
-		conn.TLSVersion(), conn.CipherSuite(), preshared, conn.IV(), conn.NextSeq())
+		conn.TLSVersion(), conn.CipherSuite(), preshared, conn.IV(), conn.NextSeq(), randReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive connection state: %w", err)
 	}

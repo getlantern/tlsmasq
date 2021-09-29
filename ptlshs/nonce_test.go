@@ -1,6 +1,7 @@
 package ptlshs
 
 import (
+	cryptoRand "crypto/rand"
 	"encoding/binary"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestNonceCache(t *testing.T) {
 func newNonceWithExpiration(t *testing.T, exp time.Time) nonce {
 	t.Helper()
 	// this TTL does not matter; we're about to overwrite the expiration
-	n, err := newNonce(time.Hour)
+	n, err := newNonce(cryptoRand.Reader, time.Hour)
 	require.NoError(t, err)
 	binary.LittleEndian.PutUint64(n[:], uint64(exp.UnixNano()))
 	return *n

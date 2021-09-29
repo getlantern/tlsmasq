@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/getlantern/tlsmasq/fuzz"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,19 +17,20 @@ type TLSOrigin struct {
 	logger        *SafeTestLogger
 	t             *testing.T
 	postHandshake func(net.Conn) error
-
 	sync.Mutex
+	cfg      *tls.Config
+	fuzzData []byte
 }
 
 // StartOrigin starts a TLSOrigin. There is no need to call Close on the returned origin.
-func StartOrigin(t *testing.T, cfg *tls.Config) *TLSOrigin {
+func StartOrigin(t *testing.T, cfg *tls.Config, originFuzzData []byte) *TLSOrigin {
 	t.Helper()
 
-	l, err := tls.Listen("tcp", "localhost:0", cfg)
+	l, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { l.Close() })
 
-	o := &TLSOrigin{l, NewSafeLogger(t), t, nil, sync.Mutex{}}
+	o := &TLSOrigin{l, NewSafeLogger(t), t, nil, sync.Mutex{}, cfg, originFuzzData}
 	go o.listenAndServe()
 	return o
 }
@@ -60,6 +62,7 @@ func (o *TLSOrigin) listenAndServe() {
 			o.logger.Logf("origin accept error for connection %d: %v", connections, err)
 			return
 		}
+		c = tls.Server(fuzz.NewEchoConn("origin", c, o.fuzzData), o.cfg)
 		o.t.Cleanup(func() { c.Close() })
 		go func(conn net.Conn, number int) {
 			if err := conn.(*tls.Conn).Handshake(); err != nil {

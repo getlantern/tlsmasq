@@ -1,6 +1,7 @@
 package ptlshs
 
 import (
+	cryptoRand "crypto/rand"
 	"crypto/sha256"
 	"io/ioutil"
 	"testing"
@@ -20,7 +21,7 @@ func TestSignalLen(t *testing.T) {
 // true across all cipher suites (which have varying maximum payload sizes).
 func TestSingleRecordSignal(t *testing.T) {
 	tlsutil.TestOverAllSuites(t, func(t *testing.T, version, suite uint16) {
-		cs, err := tlsutil.NewConnectionState(version, suite, [52]byte{}, [16]byte{}, [8]byte{})
+		cs, err := tlsutil.NewConnectionState(version, suite, [52]byte{}, [16]byte{}, [8]byte{}, cryptoRand.Reader)
 		require.NoError(t, err)
 		payload := make([]byte, absMaxSignalLenServer)
 		_, err = tlsutil.WriteRecord(ioutil.Discard, payload, cs)

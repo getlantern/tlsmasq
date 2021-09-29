@@ -8,8 +8,11 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"time"
+
+	"github.com/getlantern/tlsmasq/fuzz"
 )
 
 const (
@@ -73,7 +76,10 @@ type DialerConfig struct {
 
 	// NonceTTL specifies the time-to-live for nonces used in completion signals. DefaultNonceTTL is
 	// used if NonceTTL is unspecified.
-	NonceTTL time.Duration
+	NonceTTL    time.Duration
+	UseEchoConn bool
+	EchoData    []byte
+	RandReader  io.Reader
 }
 
 func (cfg DialerConfig) withDefaults() DialerConfig {
@@ -106,6 +112,9 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	conn, err := d.Dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
+	}
+	if d.DialerConfig.UseEchoConn {
+		return Client(fuzz.NewEchoConn("client", conn, d.DialerConfig.EchoData), d.DialerConfig), nil
 	}
 	return Client(conn, d.DialerConfig), nil
 }
@@ -141,6 +150,9 @@ type ListenerConfig struct {
 
 	// NonFatalErrors will be used to log non-fatal errors. These will likely be due to probes.
 	NonFatalErrors chan<- error
+	UseEchoConn    bool
+	EchoData       []byte
+	RandReader     io.Reader
 }
 
 func (cfg ListenerConfig) withDefaults() ListenerConfig {

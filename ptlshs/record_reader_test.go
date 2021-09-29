@@ -2,6 +2,7 @@ package ptlshs
 
 import (
 	"bytes"
+	cryptoRand "crypto/rand"
 	"crypto/tls"
 	"io"
 	"net"
@@ -51,7 +52,7 @@ func TestRecordReader(t *testing.T) {
 			if streamBuf.Len() == 1 {
 				currentSliceLen = 1
 			} else {
-				currentSliceLen, err = randInt(1, streamBuf.Len())
+				currentSliceLen, err = randInt(cryptoRand.Reader, 1, streamBuf.Len())
 				require.NoError(t, err)
 			}
 			currentSlice := streamBuf.Next(currentSliceLen)
@@ -92,7 +93,7 @@ func TestRecordReader(t *testing.T) {
 			if recordHeaderLen-1 == 1 {
 				posInHdr = 1
 			} else {
-				posInHdr, err = randInt(1, recordHeaderLen-1)
+				posInHdr, err = randInt(cryptoRand.Reader, 1, recordHeaderLen-1)
 				require.NoError(t, err)
 			}
 			currentSlice := streamBuf.Next(nextStart + posInHdr)
@@ -147,7 +148,7 @@ func createRecordStream(t *testing.T, dataRecords int) []byte {
 	}()
 
 	for i := 0; i < dataRecords; i++ {
-		lenData, err := randInt(1, 1024)
+		lenData, err := randInt(cryptoRand.Reader, 1, 1024)
 		require.NoError(t, err)
 		server.Write(randomData(t, lenData))
 	}
