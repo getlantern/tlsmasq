@@ -10,8 +10,6 @@ import (
 	"errors"
 	"net"
 	"time"
-
-	"github.com/getlantern/tlsmasq/fuzzutil"
 )
 
 const (
@@ -76,12 +74,6 @@ type DialerConfig struct {
 	// NonceTTL specifies the time-to-live for nonces used in completion signals. DefaultNonceTTL is
 	// used if NonceTTL is unspecified.
 	NonceTTL time.Duration
-
-	// Enable to use fuzzutil/fuzzechoconn.go:FuzzEchoConn, which uses
-	// FuzzEchoClientHelloData for the first TLS ClientHello. Rest of the
-	// communication is written as is
-	UseFuzzEchoConn         bool
-	FuzzEchoClientHelloData []byte
 }
 
 func (cfg DialerConfig) withDefaults() DialerConfig {
@@ -115,11 +107,6 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, err
 	}
-	if d.DialerConfig.UseFuzzEchoConn {
-		conn = fuzzutil.NewFuzzEchoConn("client->tlsmasq", conn,
-			d.DialerConfig.FuzzEchoClientHelloData)
-	}
-
 	return Client(conn, d.DialerConfig), nil
 }
 

@@ -54,7 +54,7 @@ func TestHandshake(t *testing.T) {
 	require.NoError(t, err)
 	defer origin.Close()
 	clientTransport, serverTransport := testutil.BufferedPipe()
-	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0, false, nil})
+	clientConn := Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
 	serverConn := Server(serverTransport, ListenerConfig{
 		DialOrigin: origin.DialContext,
 		Secret:     secret,
@@ -144,7 +144,7 @@ func testUnblockHelper(testClient, testClose bool) func(t *testing.T) {
 		require.NoError(t, err)
 
 		if testClient {
-			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0, false, nil})
+			testConn = Client(clientTransport, DialerConfig{secret, StdLibHandshaker{tlsCfg}, 0})
 			peerConn = tls.Server(serverTransport, tlsCfg)
 		} else {
 			origin, err := testutil.StartOrigin(tlsCfg)
@@ -200,7 +200,7 @@ func (pm pipeMaker) makePipe() (client, server net.Conn, stop func(), err error)
 	origin, err := testutil.StartOrigin(pm.originConfig.Clone())
 	require.NoError(pm.t, err)
 	defer origin.Close()
-	dCfg := DialerConfig{secret, StdLibHandshaker{Config: &tls.Config{InsecureSkipVerify: true}}, 0, false, nil}
+	dCfg := DialerConfig{secret, StdLibHandshaker{Config: &tls.Config{InsecureSkipVerify: true}}, 0}
 	lCfg := ListenerConfig{origin.DialContext, secret, 0, nil}
 
 	clientTransport, serverTransport := net.Pipe()

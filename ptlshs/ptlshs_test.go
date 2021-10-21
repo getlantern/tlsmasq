@@ -113,7 +113,7 @@ func TestSessionResumption(t *testing.T) {
 			MaxVersion:         tls.VersionTLS12,
 		},
 	}
-	dialerCfg := DialerConfig{secret, handshaker, 0, false, nil}
+	dialerCfg := DialerConfig{secret, handshaker, 0}
 	listenerCfg := ListenerConfig{DialOrigin: origin.DialContext, Secret: secret}
 
 	l, err := Listen("tcp", "localhost:0", listenerCfg)
