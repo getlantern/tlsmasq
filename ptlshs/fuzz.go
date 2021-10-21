@@ -39,7 +39,11 @@ var (
 // - In getlantern/tlsmasq/fuzz, run 'go-fuzz-build -o fuzzbin'.
 // - In getlantern/tlsmasq/fuzz, run 'go-fuzz -bin fuzzbin -workdir workdir'.
 //
-// For more information, see github.com/dvyukov/go-fuzz.
+// Input to this function is treated as a ClientHello message. Note that we do not expect record
+// headers, only the hello message itself. This is because utls.FingerprintClientHello accepts hello
+// messages, not full records.
+//
+// For more information on fuzz testing, see github.com/dvyukov/go-fuzz.
 func Fuzz(data []byte) int {
 	spec, err := utls.FingerprintClientHello(data)
 	if err != nil {
