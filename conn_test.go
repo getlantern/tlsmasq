@@ -42,7 +42,6 @@ func TestHandshake(t *testing.T) {
 	defer origin.Close()
 	clientTransport, serverTransport := testutil.BufferedPipe()
 
-	// Client Init
 	clientConn := Client(clientTransport, DialerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
@@ -54,7 +53,6 @@ func TestHandshake(t *testing.T) {
 	})
 	defer clientConn.Close()
 
-	// ServerInit Init
 	listenerCfg := ListenerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{

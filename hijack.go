@@ -112,8 +112,8 @@ type disguisedConn struct {
 	// unprocessed holds data which is either not yet unwrapped or was not wrapped to begin with.
 	processed, unprocessed *bytes.Buffer
 
-	// When set, this connection will disguise writes as TLS records using the parameters of
-	// conn and the pre-shared secret. Reads will be assumed to be disguised as well.
+	// When set, this connection will disguise writes as TLS records using the parameters of the
+	// wrapped connection and the pre-shared secret. Reads will be assumed to be disguised as well.
 	// When unset, this connection just uses the underlying net.Conn directly.
 	inDisguise bool
 
