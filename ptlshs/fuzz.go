@@ -1,4 +1,6 @@
-package fuzz
+// +build gofuzz
+
+package ptlshs
 
 import (
 	"context"
@@ -9,9 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/getlantern/tlsmasq"
 	"github.com/getlantern/tlsmasq/internal/testutil"
-	"github.com/getlantern/tlsmasq/ptlshs"
+
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -20,7 +21,7 @@ const handshakeTimeout = time.Second
 
 // Variables which do not change between fuzzing runs.
 var (
-	secret = ptlshs.Secret{0xff} // We have to set at least one byte in the secret.
+	secret = Secret{0xff} // We have to set at least one byte in the secret.
 	tlsCfg = &tls.Config{
 		InsecureSkipVerify: true,
 		Certificates:       []tls.Certificate{testutil.Cert},
@@ -47,22 +48,16 @@ func Fuzz(data []byte) int {
 	}
 
 	_client, _server := net.Pipe()
-	client := tlsmasq.Client(_client, tlsmasq.DialerConfig{
-		ProxiedHandshakeConfig: ptlshs.DialerConfig{
-			Secret: secret,
-			Handshaker: &utlsHandshaker{
-				cfg:   utlsCfg,
-				hello: spec,
-			},
+	client := Client(_client, DialerConfig{
+		Secret: secret,
+		Handshaker: &utlsHandshaker{
+			cfg:   utlsCfg,
+			hello: spec,
 		},
-		TLSConfig: tlsCfg,
 	})
-	server := tlsmasq.Server(_server, tlsmasq.ListenerConfig{
-		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
-			Secret:     secret,
-			DialOrigin: origin.dial,
-		},
-		TLSConfig: tlsCfg,
+	server := Server(_server, ListenerConfig{
+		Secret:     secret,
+		DialOrigin: origin.dial,
 	})
 	defer client.Close()
 	defer server.Close()
@@ -104,15 +99,14 @@ func (o tlsOrigin) dial(_ context.Context) (net.Conn, error) {
 
 var errBadHello = errors.New("could not apply hello spec to utls connection")
 
-// utlsHandshaker implements tlsmasq/ptlshs.Handshaker. This allows us to parrot browsers like
-// Chrome in our handshakes with tlsmasq origins.
+// utlsHandshaker implements Handshaker. This allows us to specify custom ClientHellos.
 type utlsHandshaker struct {
 	cfg   *utls.Config
 	hello *utls.ClientHelloSpec
 	sync.Mutex
 }
 
-func (h *utlsHandshaker) Handshake(conn net.Conn) (*ptlshs.HandshakeResult, error) {
+func (h *utlsHandshaker) Handshake(conn net.Conn) (*HandshakeResult, error) {
 	uconn := utls.UClient(conn, h.cfg.Clone(), utls.HelloCustom)
 	if err := uconn.ApplyPreset(h.hello); err != nil {
 		return nil, errBadHello
@@ -120,7 +114,7 @@ func (h *utlsHandshaker) Handshake(conn net.Conn) (*ptlshs.HandshakeResult, erro
 	if err := uconn.Handshake(); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
-	return &ptlshs.HandshakeResult{
+	return &HandshakeResult{
 		Version:     uconn.ConnectionState().Version,
 		CipherSuite: uconn.ConnectionState().CipherSuite,
 	}, nil
