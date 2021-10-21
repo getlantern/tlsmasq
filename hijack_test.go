@@ -37,9 +37,7 @@ func TestHijack(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin, err := testutil.StartOrigin(tlsCfg)
-	require.NoError(t, err)
-	defer origin.Close()
+	origin := testutil.StartOrigin(t, tlsCfg)
 	clientTransport, serverTransport := testutil.BufferedPipe()
 	clientConn := ptlshs.Client(clientTransport, ptlshs.DialerConfig{
 		Handshaker: ptlshs.StdLibHandshaker{
