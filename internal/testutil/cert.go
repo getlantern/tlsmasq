@@ -34,4 +34,8 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+	UTLSCert, err = utls.X509KeyPair(certPem, keyPem)
+	if err != nil {
+		panic(err)
+	}
 }
