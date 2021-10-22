@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -90,15 +91,20 @@ func Fuzz(data []byte) int {
 }
 
 type tlsOrigin struct {
-	// cfg is used for both the client and server sides of the connection.
 	cfg *tls.Config
 }
 
 func (o tlsOrigin) dial(_ context.Context) (net.Conn, error) {
-	_client, _server := net.Pipe()
-	client, server := tls.Client(_client, o.cfg), tls.Server(_server, o.cfg)
-	go server.Handshake()
-	return client, nil
+	clientTransport, serverTransport := net.Pipe()
+	server := tls.Server(serverTransport, o.cfg)
+	// TODO: use HandshakeContext and cancel if necessary
+	go func() {
+		server.Handshake()
+		io.Copy(io.Discard, server)
+	}()
+
+	// Return the raw transport to the origin.
+	return clientTransport, nil
 }
 
 var errBadHello = errors.New("could not apply hello spec to utls connection")
