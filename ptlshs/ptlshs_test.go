@@ -206,7 +206,7 @@ func TestSignalReplay(t *testing.T) {
 		var err error
 		serverHello, err = tlsutil.ParseServerHello(b)
 		if err != nil {
-			return fmt.Errorf("failure parsing server hello in onServerWrite: %w", err)
+			return fmt.Errorf("failure parsing ServerHello in onServerWrite: %w", err)
 		}
 		return nil
 	}
@@ -474,7 +474,7 @@ func TestPostHandshakeInjection(t *testing.T) {
 		var err error
 		serverHello, err = tlsutil.ParseServerHello(b)
 		if err != nil {
-			return fmt.Errorf("failure parsing server hello in onServerWrite: %w", err)
+			return fmt.Errorf("failure parsing ServerHello in onServerWrite: %w", err)
 		}
 		return nil
 	}
