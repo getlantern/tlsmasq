@@ -114,7 +114,7 @@ func (c *clientConn) Write(b []byte) (n int, err error) {
 // closes the connection on its end. As a result, this function should be treated as one which may
 // be long-running or never return.
 //
-// May return tlsutil.ErrorUnexpectedAlert.
+// May return tlsutil.UnexpectedAlertError.
 func (c *clientConn) Handshake() error {
 	return c.shakeOnce.do(func() error {
 		handshakeErr := c.handshake()
@@ -415,7 +415,7 @@ func (c *serverConn) RemoteAddr() net.Addr {
 // closes the connection on its end. As a result, this function should be treated as one which may
 // be long-running or never return.
 //
-// May return tlsutil.ErrorUnexpectedAlert.
+// May return tlsutil.UnexpectedAlertError.
 func (c *serverConn) Handshake() error {
 	return c.shakeOnce.do(func() error {
 		handshakeErr := c.handshake()
