@@ -113,6 +113,8 @@ func (c *clientConn) Write(b []byte) (n int, err error) {
 // connection comes from an active probe, this handshake function may not return until the probe
 // closes the connection on its end. As a result, this function should be treated as one which may
 // be long-running or never return.
+//
+// May return tlsutil.ErrorUnexpectedAlert.
 func (c *clientConn) Handshake() error {
 	return c.shakeOnce.do(func() error {
 		handshakeErr := c.handshake()
@@ -140,7 +142,7 @@ func (c *clientConn) handshake() error {
 		}
 		serverHello, err := tlsutil.ParseServerHello(b)
 		if err != nil {
-			return fmt.Errorf("failed to parse server hello: %w", err)
+			return fmt.Errorf("failed to parse ServerHello: %w", err)
 		}
 		serverRandom = serverHello.Random
 		return nil
@@ -156,7 +158,7 @@ func (c *clientConn) handshake() error {
 		return err
 	}
 	if serverRandom == nil {
-		return errors.New("never saw server hello")
+		return errors.New("never saw ServerHello")
 	}
 	seq, iv, err := deriveSeqAndIV(serverRandom)
 	if err != nil {
@@ -412,6 +414,8 @@ func (c *serverConn) RemoteAddr() net.Addr {
 // connection comes from an active probe, this handshake function may not return until the probe
 // closes the connection on its end. As a result, this function should be treated as one which may
 // be long-running or never return.
+//
+// May return tlsutil.ErrorUnexpectedAlert.
 func (c *serverConn) Handshake() error {
 	return c.shakeOnce.do(func() error {
 		handshakeErr := c.handshake()
