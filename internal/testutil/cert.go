@@ -1,6 +1,10 @@
 package testutil
 
-import "crypto/tls"
+import (
+	"crypto/tls"
+
+	utls "github.com/refraction-networking/utls"
+)
 
 var (
 	certPem = []byte(`-----BEGIN CERTIFICATE-----
@@ -20,12 +24,17 @@ AwEHoUQDQgAEPR3tU2Fta9ktY+6P9G0cWO+0kETA6SFs38GecTyudlHz6xvCdz8q
 EKTcWGekdmdDPsHloRNtsiCa697B2O9IFA==
 -----END EC PRIVATE KEY-----`)
 
-	Cert tls.Certificate
+	Cert     tls.Certificate
+	UTLSCert utls.Certificate
 )
 
 func init() {
 	var err error
 	Cert, err = tls.X509KeyPair(certPem, keyPem)
+	if err != nil {
+		panic(err)
+	}
+	UTLSCert, err = utls.X509KeyPair(certPem, keyPem)
 	if err != nil {
 		panic(err)
 	}

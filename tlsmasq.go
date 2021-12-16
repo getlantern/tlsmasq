@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"time"
 
 	"github.com/getlantern/tlsmasq/ptlshs"
 )
@@ -45,10 +46,6 @@ type dialer struct {
 	DialerConfig
 }
 
-func NewDialer(cfg DialerConfig) Dialer {
-	return dialer{&net.Dialer{}, cfg.withDefaults()}
-}
-
 func (d dialer) Dial(network, address string) (net.Conn, error) {
 	return d.DialContext(context.Background(), network, address)
 }
@@ -60,6 +57,24 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 		return nil, err
 	}
 	return newConn(conn.(ptlshs.Conn), d.TLSConfig, true, d.ProxiedHandshakeConfig.Secret), nil
+}
+
+// WrapDialer wraps the input dialer with a network dialer which will perform the tlsmasq protocol.
+// Dialing will result in TLS connections with peers.
+func WrapDialer(d Dialer, cfg DialerConfig) Dialer {
+	return dialer{d, cfg.withDefaults()}
+}
+
+// Dial a tlsmasq listener. This will result in a TLS connection with the peer.
+func Dial(network, address string, cfg DialerConfig) (net.Conn, error) {
+	return WrapDialer(&net.Dialer{}, cfg).Dial(network, address)
+}
+
+// DialTimeout acts like Dial but takes a timeout.
+func DialTimeout(network, address string, cfg DialerConfig, timeout time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return WrapDialer(&net.Dialer{}, cfg).DialContext(ctx, network, address)
 }
 
 // ListenerConfig specifies configuration for listening.

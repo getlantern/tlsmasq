@@ -26,9 +26,7 @@ func TestListenAndDial(t *testing.T) {
 	_, err := cryptoRand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin, err := testutil.StartOrigin(&tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
-	require.NoError(t, err)
-	defer origin.Close()
+	origin := testutil.StartOrigin(t, &tls.Config{Certificates: []tls.Certificate{testutil.Cert}})
 	insecureTLSConfig := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{testutil.Cert}}
 	dialerCfg := DialerConfig{
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
@@ -77,7 +75,7 @@ func TestListenAndDial(t *testing.T) {
 	}()
 
 	msgFromServer, clientErr := func() (string, error) {
-		conn, err := NewDialer(dialerCfg).Dial("tcp", l.Addr().String())
+		conn, err := Dial("tcp", l.Addr().String(), dialerCfg)
 		if err != nil {
 			return "", fmt.Errorf("dial failed: %w", err)
 		}

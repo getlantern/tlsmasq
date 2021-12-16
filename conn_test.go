@@ -37,12 +37,9 @@ func TestHandshake(t *testing.T) {
 	_, err := rand.Read(secret[:])
 	require.NoError(t, err)
 
-	origin, err := testutil.StartOrigin(tlsCfg)
-	require.NoError(t, err)
-	defer origin.Close()
+	origin := testutil.StartOrigin(t, tlsCfg)
 	clientTransport, serverTransport := testutil.BufferedPipe()
 
-	// Client Init
 	clientConn := Client(clientTransport, DialerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.DialerConfig{
@@ -54,7 +51,6 @@ func TestHandshake(t *testing.T) {
 	})
 	defer clientConn.Close()
 
-	// ServerInit Init
 	listenerCfg := ListenerConfig{
 		TLSConfig: tlsCfg,
 		ProxiedHandshakeConfig: ptlshs.ListenerConfig{
