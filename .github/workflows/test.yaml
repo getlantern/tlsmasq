@@ -1,0 +1,33 @@
+name: Build and Test
+
+on:
+  - push
+  - pull_request
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.18
+    - name: Granting private modules access
+      run: |
+          git config --global url."https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
+    # We have a lot of concurrency and synchronization in this library. Test with -race and
+    # -count=100 to expose any timing-related bugs.
+    - name: Run Unit tests
+      run: |
+        go test -race -count=100 -v -failfast -tags="headless" -coverprofile=profile.cov ./...
+    # TODO: try removing GO111MODULE and using 'go install @latest'
+    - name: Install goveralls
+      env:
+        GO111MODULE: off
+      run: go get github.com/mattn/goveralls
+    - name: Send coverage
+      env:
+        COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: goveralls -coverprofile=profile.cov -service=github
