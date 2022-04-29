@@ -14,9 +14,6 @@ jobs:
       uses: actions/setup-go@v2
       with:
         go-version: 1.18
-    - name: Granting private modules access
-      run: |
-          git config --global url."https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
     # We have a lot of concurrency and synchronization in this library. Test with -race and
     # -count=100 to expose any timing-related bugs.
     - name: Run Unit tests
