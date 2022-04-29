@@ -1,0 +1,27 @@
+name: Build and Test
+
+on:
+  - push
+  - pull_request
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.18
+    # We have a lot of concurrency and synchronization in this library. Test with -race and
+    # -count=100 to expose any timing-related bugs.
+    - name: Run Unit tests
+      run: |
+        go test -race -count=100 -v -failfast -tags="headless" -coverprofile=profile.cov ./...
+    - name: Install goveralls
+      run: go install github.com/mattn/goveralls@latest
+    - name: Send coverage
+      env:
+        COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: goveralls -coverprofile=profile.cov -service=github
