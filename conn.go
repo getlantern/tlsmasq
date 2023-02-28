@@ -55,6 +55,10 @@ func newConn(c ptlshs.Conn, cfg *tls.Config, isClient bool, preshared ptlshs.Sec
 	return &conn{c, cfg, isClient, preshared, sync.Once{}, nil}
 }
 
+func (c *conn) Wrapped() net.Conn {
+	return c.Conn
+}
+
 func (c *conn) Read(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
 		return 0, fmt.Errorf("handshake failed: %w", err)

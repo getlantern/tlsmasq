@@ -94,6 +94,10 @@ func Client(toServer net.Conn, cfg DialerConfig) Conn {
 	return &clientConn{toServer, cfg, nil, nil, newOnce(), newOnce()}
 }
 
+func (c *clientConn) Wrapped() net.Conn {
+	return c.Conn
+}
+
 func (c *clientConn) Read(b []byte) (n int, err error) {
 	if err := c.Handshake(); err != nil {
 		return 0, wrapError("handshake failed", err)
@@ -315,6 +319,10 @@ func serverConnWithCache(toClient net.Conn, cfg ListenerConfig, cache *nonceCach
 	return &serverConn{
 		toClient, sync.RWMutex{}, cfg, cache, closeCache, nil,
 		newOnce(), newOnce(), newDeadline(), newDeadline(), sync.Mutex{}}
+}
+
+func (c *serverConn) Wrapped() net.Conn {
+	return c.wrapped
 }
 
 func (c *serverConn) getWrapped() net.Conn {
@@ -666,9 +674,10 @@ func (c *serverConn) IV() [16]byte {
 }
 
 // Continuously reads off of conn until one of the following:
-// 	- The bytes read constitute a valid TLS ClientHello.
-//	- The bytes read could not possibly constitute a valid TLS ClientHello.
-//	- A non-temporary network error is encountered.
+//   - The bytes read constitute a valid TLS ClientHello.
+//   - The bytes read could not possibly constitute a valid TLS ClientHello.
+//   - A non-temporary network error is encountered.
+//
 // Whatever was read is always returned.
 func readClientHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte, error) {
 	var (
@@ -705,9 +714,10 @@ func readClientHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte
 }
 
 // Continuously reads off of conn until one of the following:
-// 	- The bytes read constitute a valid TLS ServerHello.
-//	- The bytes read could not possibly constitute a valid TLS ServerHello.
-//	- A non-temporary network error is encountered.
+//   - The bytes read constitute a valid TLS ServerHello.
+//   - The bytes read could not possibly constitute a valid TLS ServerHello.
+//   - A non-temporary network error is encountered.
+//
 // Whatever was read is always returned. When a valid ServerHello is read, it is parsed and used to
 // create a connection state.
 func readServerHello(ctx context.Context, conn net.Conn, bufferSize int) ([]byte, *connState, error) {
@@ -786,6 +796,10 @@ func mitm(conn net.Conn, onRead, onWrite func([]byte) error) mitmConn {
 		onWrite = func(_ []byte) error { return nil }
 	}
 	return mitmConn{conn, onRead, onWrite}
+}
+
+func (c mitmConn) Wrapped() net.Conn {
+	return c.Conn
 }
 
 func (c mitmConn) Read(b []byte) (n int, err error) {
