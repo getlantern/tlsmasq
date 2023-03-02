@@ -57,7 +57,7 @@ func hijack(conn ptlshs.Conn, cfg *tls.Config, preshared ptlshs.Secret, client b
 	// successfully hijacked and further communication will be conducted with the appropriate
 	// version and suite, but newly-negotiated symmetric keys.
 	disguisedConn.shedDisguise()
-	return hijacked, nil
+	return &tlsConn{hijacked, conn}, nil
 }
 
 func ensureParameters(cfg *tls.Config, conn ptlshs.Conn) (*tls.Config, error) {
@@ -169,4 +169,13 @@ func (dc *disguisedConn) Write(b []byte) (n int, err error) {
 		err = fmt.Errorf("failed to wrap data in TLS record: %w", err)
 	}
 	return
+}
+
+type tlsConn struct {
+	*tls.Conn
+	wrapped net.Conn
+}
+
+func (conn *tlsConn) Wrapped() net.Conn {
+	return conn.wrapped
 }
